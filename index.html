@@ -378,11 +378,16 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
   <div class="page-header">
     <div class="page-header-left">
       <h2>Cobros</h2>
-      <p>Control de pagos por semana</p>
+      <p id="cobros-week-label">Control de pagos por semana</p>
     </div>
     <div class="page-header-actions">
+      <div class="week-nav" style="margin-right:12px">
+        <button class="week-nav-btn" onclick="cobrosWeekNav(-1)">&#8249;</button>
+        <span class="week-nav-label" id="cobros-week-nav-label">—</span>
+        <button class="week-nav-btn" onclick="cobrosWeekNav(1)">&#8250;</button>
+      </div>
       <div class="filter-group">
-        <button class="filter-btn active" id="cobBtn-semana" onclick="setCobFiltro('semana',this)">Semana actual</button>
+        <button class="filter-btn active" id="cobBtn-semana" onclick="setCobFiltro('semana',this)">Semana seleccionada</button>
         <button class="filter-btn" id="cobBtn-pendientes" onclick="setCobFiltro('pendientes',this)">⚠ Todos los pendientes</button>
       </div>
     </div>
@@ -547,9 +552,14 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
   <div class="page-header">
     <div class="page-header-left">
       <h2>Confirmaciones de pedido</h2>
-      <p>Marcá qué confirmó cada cliente y el tipo de huevo</p>
+      <p id="conf-week-label">Marcá qué confirmó cada cliente y el tipo de huevo</p>
     </div>
     <div class="page-header-actions">
+      <div class="week-nav" style="margin-right:12px">
+        <button class="week-nav-btn" onclick="confWeekNav(-1)">&#8249;</button>
+        <span class="week-nav-label" id="conf-week-nav-label">—</span>
+        <button class="week-nav-btn" onclick="confWeekNav(1)">&#8250;</button>
+      </div>
       <div class="filter-group" id="fg-conf-estado">
         <button class="filter-btn active" onclick="setConfFilter('todos',this)">Todos</button>
         <button class="filter-btn" onclick="setConfFilter('pendiente',this)">Sin respuesta</button>
@@ -573,11 +583,11 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
     </div>
     <div class="page-header-actions">
       <div class="week-nav">
-        <button class="week-btn" onclick="changeWeek(-1);renderRuta()">
+        <button class="week-btn" onclick="rutaWeekNav(-1)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
         </button>
         <span class="week-label" id="ruta-week-display"></span>
-        <button class="week-btn" onclick="changeWeek(1);renderRuta()">
+        <button class="week-btn" onclick="rutaWeekNav(1)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
       </div>
@@ -932,16 +942,7 @@ const DEFAULT_CLIENTES = [
   {id:136,nombre:"Da Domenico",tel:"",seg:"b2b",ruta:"pickup",fmt:[{u:30,q:3,p:4000}],zona:"Cerca casa",notas:"Pizzeria - recoge él mismo, variable",estado:"activo",freq:"variable"}
 ];
 
-const DEFAULT_MOVIMIENTOS = [
-  {id:1,fecha:'2026-03-12',tipo:'venta',desc:'Antica Pizzeria Napoletana',monto:280000,pago:'sinpe',notas:''},
-  {id:2,fecha:'2026-03-12',tipo:'compra',desc:'Compra huevo — Diego Aguilar',monto:-480000,pago:'transferencia',notas:''},
-  {id:3,fecha:'2026-04-05',tipo:'venta',desc:'RGANIC Market',monto:240000,pago:'sinpe',notas:''},
-  {id:4,fecha:'2026-04-05',tipo:'compra',desc:'Compra huevo — Diego Aguilar',monto:-61000,pago:'transferencia',notas:''},
-  {id:5,fecha:'2026-04-19',tipo:'venta',desc:'Parallel',monto:72000,pago:'sinpe',notas:''},
-  {id:6,fecha:'2026-05-05',tipo:'venta',desc:'Mouka Cafe - Michelle',monto:40000,pago:'sinpe',notas:'FE Mouka 19052026'},
-  {id:7,fecha:'2026-05-12',tipo:'compra',desc:'Compra huevo — Diego Aguilar',monto:-61000,pago:'transferencia',notas:''},
-  {id:8,fecha:'2026-05-18',tipo:'venta',desc:'Semana 18 Mayo — ruta Escazú',monto:485000,pago:'sinpe',notas:''},
-];
+const DEFAULT_MOVIMIENTOS = [];
 
 // ═══════════════════════════════════════════════
 // ═══════════════════════════════════════════════
@@ -1012,9 +1013,12 @@ async function apiPost(action, data) {
 
 // ── CLIENTES ─────────────────────────────────────
 function loadState() {
+  // Always start from localStorage cache; Sheets sync happens on load event
   try {
     const saved = lsGet('mr_clientes');
-    return saved ? JSON.parse(saved) : DEFAULT_CLIENTES.map(c=>({...c}));
+    if (saved) return JSON.parse(saved);
+    // No cache: use DEFAULT_CLIENTES as seed (will be overwritten by Sheets sync)
+    return DEFAULT_CLIENTES.map(c=>({...c}));
   } catch(e) { return DEFAULT_CLIENTES.map(c=>({...c})); }
 }
 
@@ -1193,8 +1197,8 @@ var goTo = function(id, el) {
     clientes:renderClientes,
     finanzas:renderFinanzas,
     estadisticas:renderEstadisticas,
-    confirmaciones:function(){currentWeekOffset=0;renderConfirmaciones();},
-    ruta:function(){currentWeekOffset=0;renderRuta();},
+    confirmaciones:function(){confWeekOffset=0;renderConfirmaciones();},
+    ruta:function(){rutaWeekOffset=0;renderRuta();},
     inventario:function(){INVENTARIO=loadInventario();NIID=Math.max(...(INVENTARIO.length?INVENTARIO.map(i=>i.id||0):[0]),0)+1;setTimeout(renderInventario,0);}
   };
   if(renders[id]) renders[id]();
@@ -1438,7 +1442,22 @@ function setCobFiltro(v, el) {
   renderCobros();
 }
 
+let cobrosWeekOffset = 0;
+function cobrosWeekNav(dir) {
+  cobrosWeekOffset += dir;
+  _cobFiltro = 'semana'; // switch to semana view when navigating
+  document.getElementById('cobBtn-semana')?.classList.add('active');
+  document.getElementById('cobBtn-pendientes')?.classList.remove('active');
+  renderCobros();
+}
+
 function renderCobros() {
+  // Update nav label
+  const wkNav = getWeekDates(cobrosWeekOffset);
+  const navLbl = document.getElementById('cobros-week-nav-label');
+  if (navLbl) navLbl.textContent = wkNav.label;
+  const weekLbl = document.getElementById('cobros-week-label');
+  if (weekLbl) weekLbl.textContent = cobrosWeekOffset === 0 ? 'Semana actual' : (cobrosWeekOffset > 0 ? 'Semana futura — pagos anticipados' : 'Semana pasada — pendientes');
   const wk = getWeekDates(currentWeekOffset);
   const cobFiltro = window._cobFiltro || 'semana';
 
@@ -1454,11 +1473,12 @@ function renderCobros() {
       return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
     });
   } else {
-    // Current week — only confirmed, changed, or quick delivery
+    // Selected week — only confirmed, changed, or quick delivery
+    const wkCob = getWeekDates(cobrosWeekOffset);
     semP = PEDIDOS.filter(p => {
-      if (p.weekKey !== wk.key) return false;
+      if (p.weekKey !== wkCob.key) return false;
       if (p.esEntregaRapida) return true;
-      const conf = getConf(wk.key, p.id);
+      const conf = getConf(wkCob.key, p.id);
       return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
     });
   }
@@ -1482,7 +1502,7 @@ function renderCobros() {
   const titleEl = document.getElementById('cobros-card-title');
   if(titleEl) titleEl.textContent = cobFiltro==='pendientes'
     ? `Todos los cobros pendientes — ${pen.length} clientes / ${Object.keys(semP.reduce((a,p)=>{a[p.weekKey]=1;return a},{})).length} semanas`
-    : `Semana ${wk.label}`;
+    : `Semana ${getWeekDates(cobrosWeekOffset).label}`;
 
   document.getElementById('cobros-metrics').innerHTML = `
     <div class="metric-card ${cobFiltro==='pendientes'?'accent':''}">
@@ -1558,19 +1578,35 @@ function renderCobros() {
         </div>`;
     }).join('');
   } else {
-    el.innerHTML = sorted.map(p=>`
-      <div class="cobro-summary">
+    el.innerHTML = sorted.map(p=>{
+      const notaCobro = p.notaCobro || '';
+      return `
+      <div class="cobro-summary" style="flex-wrap:wrap;gap:6px">
         <div class="cobro-nombre">${p.nombre}</div>
         <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStr(p.fmt)}</div>
         <div class="cobro-monto">${moneyFmt(fmtMonto(p.fmt))}</div>
-        <div style="min-width:130px;text-align:right">
-          ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none;margin-right:4px">📱 WA</a>`:''}
-          <button class="pay-btn ${p.pago} btn-sm" onclick="togglePago(${p.id},'${wk.key}');renderCobros()">
+        ${notaCobro?`<div style="width:100%;font-size:11px;color:var(--text3);font-style:italic;padding:2px 0">📝 ${notaCobro}</div>`:''}
+        <div style="min-width:130px;text-align:right;display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end">
+          ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none">📱</a>`:''}
+          <button class="btn btn-xs" onclick="editNotaCobro(${p.id},'${getWeekDates(cobrosWeekOffset).key}')" title="Agregar nota de pago">📝</button>
+          <button class="pay-btn ${p.pago} btn-sm" onclick="togglePago(${p.id},'${getWeekDates(cobrosWeekOffset).key}');renderCobros()">
             ${p.pago==='pagado'?'✓ Cobrado':'Marcar cobrado'}
           </button>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
+}
+
+function editNotaCobro(clienteId, weekKey) {
+  const p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey);
+  if (!p) return;
+  const nota = prompt('Nota de pago para ' + p.nombre + ':', p.notaCobro || '');
+  if (nota === null) return; // cancelled
+  p.notaCobro = nota.trim();
+  savePedidos();
+  pushPedidoSheets(p);
+  renderCobros();
 }
 
 // ═══════════════════════════════════════════════
@@ -2807,6 +2843,27 @@ function loadConfirmaciones() {
 }
 function saveConfirmaciones() {
   try { lsSet('mr_confirmaciones', JSON.stringify(CONFIRMACIONES)); } catch(e) {}
+  pushConfirmacionesSheets();
+}
+
+async function pushConfirmacionesSheets() {
+  const url = getSheetsURL();
+  if (!url) return;
+  try {
+    await apiPost('saveConfirmaciones', {key:'CONFIRMACIONES', value: JSON.stringify(CONFIRMACIONES)});
+  } catch(e) { console.warn('pushConf error', e); }
+}
+
+async function syncConfirmacionesFromSheets() {
+  const url = getSheetsURL();
+  if (!url) return;
+  try {
+    const data = await apiGet('getConfirmaciones');
+    if (data && data.value) {
+      CONFIRMACIONES = JSON.parse(data.value);
+      lsSet('mr_confirmaciones', JSON.stringify(CONFIRMACIONES));
+    }
+  } catch(e) { console.warn('syncConf error', e); }
 }
 let CONFIRMACIONES = loadConfirmaciones();
 
@@ -2833,8 +2890,19 @@ function setConfFilter(v, el) {
   el.classList.add('active');
   renderConfirmaciones();
 }
+let confWeekOffset = 0;
+function confWeekNav(dir) {
+  confWeekOffset += dir;
+  renderConfirmaciones();
+}
+
 function renderConfirmaciones() {
-  const wk = getWeekDates(currentWeekOffset);
+  const wk = getWeekDates(confWeekOffset);
+  // Update nav label
+  const navLbl = document.getElementById('conf-week-nav-label');
+  if (navLbl) navLbl.textContent = wk.label;
+  const weekLbl = document.getElementById('conf-week-label');
+  if (weekLbl) weekLbl.textContent = confWeekOffset === 0 ? 'Semana actual' : (confWeekOffset > 0 ? 'Semana futura' : 'Semana pasada');
   const searchQ = (document.getElementById('conf-search')?.value || '').toLowerCase();
   const estadoFilter = window._confEstadoFilter || 'todos';
   
@@ -3183,8 +3251,11 @@ function getZoneScore(zona, ruta) {
   return 99;
 }
 
+let rutaWeekOffset = 0;
+function rutaWeekNav(dir) { rutaWeekOffset += dir; renderRuta(); }
+
 function renderRuta() {
-  const wk = getWeekDates(currentWeekOffset);
+  const wk = getWeekDates(rutaWeekOffset);
   const rwEl = document.getElementById('ruta-week-display');
   if(rwEl) rwEl.textContent = wk.label;
   const el = document.getElementById('ruta-content');
@@ -3815,18 +3886,17 @@ async function testAPIUrl() {
 
 async function syncAll() {
   showSync('syncing');
-  // Pull clientes from Sheets
   await syncClientesFromSheets();
-  // Pull pedidos for current week from Sheets
-  const wk = getWeekDates(currentWeekOffset);
+  await syncConfirmacionesFromSheets();
+  const wk = getWeekDates(rutaWeekOffset || 0);
   await syncPedidosFromSheets(wk.key);
-  // Push any local pedidos for this week that Sheets might not have
   const localPedidos = PEDIDOS.filter(p => p.weekKey === wk.key);
   if (localPedidos.length) await pushPedidosBulk(localPedidos);
   renderDashboard();
   renderClientes();
   renderRuta();
   renderPedidos();
+  renderConfirmaciones();
   showSync('ok');
 }
 
@@ -3858,7 +3928,23 @@ const _origSaveCliente = typeof saveCliente === 'function' ? saveCliente : null;
 window.addEventListener('load', () => {
   const url = getSheetsURL();
   if (url) {
-    setTimeout(() => syncClientesFromSheets(), 800);
+    setTimeout(async () => {
+      showSync('syncing');
+      // Pull everything from Sheets on startup
+      await syncClientesFromSheets();
+      await syncConfirmacionesFromSheets();
+      // Pull pedidos for current + next week
+      const wkCurr = getWeekDates(0);
+      const wkNext = getWeekDates(1);
+      await syncPedidosFromSheets(wkCurr.key);
+      await syncPedidosFromSheets(wkNext.key);
+      renderDashboard();
+      renderConfirmaciones();
+      renderRuta();
+      renderPedidos();
+      renderCobros();
+      showSync('ok');
+    }, 600);
   }
 });
 
