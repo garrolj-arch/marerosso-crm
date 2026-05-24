@@ -972,48 +972,42 @@ function showSync(status, msg) {
   el.innerHTML = `<span style="color:${s.color};font-size:12px">${s.icon} ${s.txt}</span>`;
 }
 
-// ── API CALLS — JSONP para GET (evita CORS), fetch para POST ──
-let _jsonpCount = 0;
-function jsonpGet(action, params={}) {
-  return new Promise((resolve, reject) => {
-    const url = getSheetsURL();
-    if (!url) return reject(new Error('Sin URL configurada'));
-    const cbName = '_mrCb' + (++_jsonpCount);
-    const timeout = setTimeout(() => {
-      delete window[cbName];
-      reject(new Error('Timeout — sin respuesta del servidor'));
-    }, 15000);
-    window[cbName] = function(data) {
-      clearTimeout(timeout);
-      delete window[cbName];
-      script.remove();
-      if (data && data.error) reject(new Error(data.error));
-      else resolve(data);
-    };
-    const qs = new URLSearchParams({action, callback: cbName, ...params}).toString();
-    const script = document.createElement('script');
-    script.src = url + '?' + qs;
-    script.onerror = () => { clearTimeout(timeout); delete window[cbName]; reject(new Error('Error de red')); };
-    document.head.appendChild(script);
-  });
-}
-
+// ── API CALLS — fetch con no-redirect para evitar CORS ──
 async function apiGet(action, params={}) {
-  return jsonpGet(action, params);
+  const url = getSheetsURL();
+  if (!url) throw new Error('Sin URL configurada');
+  const qs = new URLSearchParams({action, ...params}).toString();
+  const res = await fetch(url + '?' + qs, {
+    redirect: 'follow',
+    mode: 'cors'
+  });
+  const text = await res.text();
+  try {
+    const json = JSON.parse(text);
+    if (json.error) throw new Error(json.error);
+    return json;
+  } catch(e) {
+    throw new Error('Respuesta inválida del servidor');
+  }
 }
 
 async function apiPost(action, data) {
   const url = getSheetsURL();
   if (!url) return null;
-  // POST via fetch — Apps Script acepta POST sin redirección
   const res = await fetch(url, {
     method: 'POST',
     body: JSON.stringify({action, data}),
-    headers: {'Content-Type': 'text/plain'} // evita preflight CORS
+    mode: 'cors',
+    redirect: 'follow'
   });
-  const json = await res.json();
-  if (json.error) throw new Error(json.error);
-  return json;
+  const text = await res.text();
+  try {
+    const json = JSON.parse(text);
+    if (json.error) throw new Error(json.error);
+    return json;
+  } catch(e) {
+    throw new Error('Respuesta inválida del servidor');
+  }
 }
 
 // ── CLIENTES ─────────────────────────────────────
