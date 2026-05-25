@@ -961,12 +961,12 @@ async function sbUpsert(table, data) {
       'apikey': SUPA_KEY,
       'Authorization': `Bearer ${SUPA_KEY}`,
       'Content-Type': 'application/json',
-      'Prefer': 'resolution=merge-duplicates'
+      'Prefer': 'resolution=merge-duplicates,return=minimal'
     },
     body: JSON.stringify(Array.isArray(data) ? data : [data])
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.status === 204 ? {} : res.json();
+  return {};
 }
 
 async function sbDelete(table, filter) {
