@@ -356,6 +356,10 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
         </button>
       </div>
+      <button class="btn" onclick="openAgregarClienteSemana()" style="margin-right:4px">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Agregar cliente
+      </button>
       <button class="btn btn-primary" onclick="genWeek()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
         Generar semana
@@ -1951,6 +1955,33 @@ function saveCliente() {
 
   closeModal('modal-cliente');
   renderClientes();
+
+  // If called from "Agregar cliente a semana", add to current week automatically
+  if (_addToWeekAfterSave && clienteGuardado) {
+    _addToWeekAfterSave = false;
+    const wk = getWeekDates(currentWeekOffset);
+    const nuevoPedido = {
+      id: clienteGuardado.id,
+      weekKey: wk.key,
+      weekLabel: wk.label,
+      nombre: clienteGuardado.nombre,
+      ruta: clienteGuardado.ruta,
+      zona: clienteGuardado.zona || '',
+      notas: clienteGuardado.notas || '',
+      tel: clienteGuardado.tel || '',
+      fmt: clienteGuardado.fmt,
+      seg: clienteGuardado.seg || 'domicilio',
+      pago: 'pendiente',
+      entregado: false,
+      agregadoManual: true
+    };
+    PEDIDOS.push(nuevoPedido);
+    savePedidos();
+    pushPedidoSheets(nuevoPedido);
+    goTo('pedidos', null);
+    renderPedidos();
+    setTimeout(() => alert('✅ ' + clienteGuardado.nombre + ' fue agregado a la semana ' + wk.label), 300);
+  }
 }
 
 function delCliente(id) {
@@ -3113,32 +3144,36 @@ function renderConfirmaciones() {
 function renderFmtSelector(p, conf, weekKey) {
   var isLocked = !!conf.bloqueado;
   var fo = conf.fmtOverride || {};
-  var html = '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:4px">';
+
+  // Calculate default quantities per type from ALL formats combined
+  // (fixes double-counter bug for clients with multiple formats e.g. 30x30u + 15x15u)
+  var defaults = { gsp: 0, gcp: 0, pcp: 0 };
   p.fmt.forEach(function(f) {
-    var fk = 'fmt' + f.u;
     var defTipo = f.u === 15 ? 'pcp' : (p.seg === 'b2b' ? 'gsp' : 'gcp');
-    html += '<div style="background:var(--bg2);border-radius:8px;padding:4px 8px;display:flex;gap:6px;align-items:center">';
-    ['gsp','gcp','pcp'].forEach(function(k) {
-      var tp = TIPOS[k];
-      var inputId = 'ci_' + weekKey.replace(/-/g,'') + '_' + p.id + '_' + fk + '_' + k;
-      var qty = fo[fk+'_'+k] !== undefined ? fo[fk+'_'+k] : (k === defTipo ? f.q : 0);
-      var active = qty > 0;
-      var borderColor = active ? tp.color : 'var(--border2)';
-      var bgColor = active ? tp.bg : 'var(--bg)';
-      html += '<div style="display:flex;flex-direction:column;align-items:center;gap:1px">';
-      html += '<input type="number" id="' + inputId + '" value="' + qty + '" min="0" step="1"';
-      html += ' data-wk="' + weekKey + '" data-id="' + p.id + '" data-key="' + fk+'_'+k + '"';
-      html += ' data-color="' + tp.color + '" data-bg="' + tp.bg + '"';
-      html += ' style="width:44px;text-align:center;font-size:12px;padding:3px 2px;border:2px solid ' + borderColor + ';border-radius:5px;background:' + bgColor + ';' + (isLocked ? 'opacity:0.7;cursor:not-allowed;' : '') + '"';
-      if (isLocked) {
-        html += ' disabled';
-      } else {
-        html += ' oninput="cqLive(this)" onchange="cqSave(this)"';
-      }
-      html += '>';
-      html += '<span style="font-size:9px;font-weight:' + (active?'700':'400') + ';color:' + (active?tp.color:'var(--text3)') + '">' + tp.short + '</span>';
-      html += '</div>';
-    });
+    defaults[defTipo] += f.q;
+  });
+
+  var html = '<div style="display:flex;gap:6px;align-items:center;margin-top:4px;background:var(--bg2);border-radius:8px;padding:4px 8px">';
+  ['gsp','gcp','pcp'].forEach(function(k) {
+    var tp = TIPOS[k];
+    var inputId = 'ci_' + weekKey.replace(/-/g,'') + '_' + p.id + '_' + k;
+    // Check fmtOverride first, then fall back to calculated default
+    var qty = fo['fmt_'+k] !== undefined ? fo['fmt_'+k] : (fo[k] !== undefined ? fo[k] : defaults[k]);
+    var active = qty > 0;
+    var borderColor = active ? tp.color : 'var(--border2)';
+    var bgColor = active ? tp.bg : 'var(--bg)';
+    html += '<div style="display:flex;flex-direction:column;align-items:center;gap:1px">';
+    html += '<input type="number" id="' + inputId + '" value="' + qty + '" min="0" step="1"';
+    html += ' data-wk="' + weekKey + '" data-id="' + p.id + '" data-key="fmt_' + k + '"';
+    html += ' data-color="' + tp.color + '" data-bg="' + tp.bg + '"';
+    html += ' style="width:44px;text-align:center;font-size:12px;padding:3px 2px;border:2px solid ' + borderColor + ';border-radius:5px;background:' + bgColor + ';' + (isLocked ? 'opacity:0.7;cursor:not-allowed;' : '') + '"';
+    if (isLocked) {
+      html += ' disabled';
+    } else {
+      html += ' oninput="cqLive(this)" onchange="cqSave(this)"';
+    }
+    html += '>';
+    html += '<span style="font-size:9px;font-weight:' + (active?'700':'400') + ';color:' + (active?tp.color:'var(--text3)') + '">' + tp.short + '</span>';
     html += '</div>';
   });
   html += '</div>';
@@ -3983,6 +4018,144 @@ window.addEventListener('load', () => {
   }
 });
 
+// ═══════════════════════════════════════════════
+// AGREGAR CLIENTE A SEMANA MANUALMENTE
+// ═══════════════════════════════════════════════
+let _acsSelectedCliente = null;
+
+function openAgregarClienteSemana() {
+  _acsSelectedCliente = null;
+  document.getElementById('f-acs-search').value = '';
+  document.getElementById('acs-results').style.display = 'none';
+  document.getElementById('acs-selected').style.display = 'none';
+  document.getElementById('acs-confirm-btn').style.display = 'none';
+
+  // Populate week options: current week + next 3
+  const sel = document.getElementById('acs-semana');
+  sel.innerHTML = '';
+  for (let i = 0; i <= 3; i++) {
+    const wk = getWeekDates(i);
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = wk.label + (i === 0 ? ' (semana actual)' : i === 1 ? ' (próxima semana)' : '');
+    if (i === currentWeekOffset) opt.selected = true;
+    sel.appendChild(opt);
+  }
+
+  openModal('modal-agregar-semana');
+  setTimeout(() => document.getElementById('f-acs-search').focus(), 200);
+}
+
+function renderACSResults() {
+  const q = document.getElementById('f-acs-search').value.toLowerCase().trim();
+  const el = document.getElementById('acs-results');
+  if (!q) { el.style.display = 'none'; return; }
+
+  const wkOffset = currentWeekOffset;
+  const wk = getWeekDates(wkOffset);
+
+  const matches = CLIENTES.filter(c =>
+    c.estado === 'activo' &&
+    (c.nombre.toLowerCase().includes(q) || (c.zona||'').toLowerCase().includes(q))
+  ).slice(0, 8);
+
+  if (!matches.length) {
+    el.style.display = 'block';
+    el.innerHTML = `<div style="padding:12px;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:13px;color:var(--text3)">No se encontró "${document.getElementById('f-acs-search').value}"</span>
+      <button class="btn btn-sm btn-primary" onclick="openNuevoClienteEnSemana()" style="font-size:12px">+ Crear cliente nuevo</button>
+    </div>`;
+    return;
+  }
+
+  el.style.display = 'block';
+  el.innerHTML = matches.map(c => {
+    const yaEnSemana = PEDIDOS.some(p => p.id === c.id && p.weekKey === wk.key);
+    return `<div onclick="${yaEnSemana ? '' : 'selectACSCliente(' + c.id + ')'}" style="padding:10px 14px;cursor:${yaEnSemana?'default':'pointer'};border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;opacity:${yaEnSemana?'.5':'1'};${yaEnSemana?'':''}hover:background:var(--bg2)">
+      <div>
+        <div style="font-weight:500;font-size:13px">${c.nombre} ${yaEnSemana?'<span style="font-size:10px;color:var(--green)">✓ ya en semana</span>':''}</div>
+        <div style="font-size:11px;color:var(--text3)">${c.ruta||''} · ${c.zona||''} · ${fmtStr(c.fmt)}</div>
+      </div>
+      ${!yaEnSemana?'<span style="font-size:11px;color:var(--accent)">Seleccionar →</span>':''}
+    </div>`;
+  }).join('');
+}
+
+function selectACSCliente(id) {
+  _acsSelectedCliente = CLIENTES.find(c => c.id === id);
+  if (!_acsSelectedCliente) return;
+  document.getElementById('acs-results').style.display = 'none';
+  document.getElementById('f-acs-search').value = _acsSelectedCliente.nombre;
+  document.getElementById('acs-sel-nombre').textContent = _acsSelectedCliente.nombre;
+  document.getElementById('acs-sel-detalle').textContent =
+    (_acsSelectedCliente.ruta||'') + ' · ' + (_acsSelectedCliente.zona||'') + ' · ' + fmtStr(_acsSelectedCliente.fmt) + ' · ' + moneyFmt(fmtMonto(_acsSelectedCliente.fmt));
+  document.getElementById('acs-selected').style.display = 'block';
+  document.getElementById('acs-confirm-btn').style.display = 'inline-flex';
+
+  // Set week selector to match client's route week
+  const sel = document.getElementById('acs-semana');
+  sel.value = currentWeekOffset;
+}
+
+function openNuevoClienteEnSemana() {
+  const nombre = document.getElementById('f-acs-search').value.trim();
+  closeModal('modal-agregar-semana');
+  _addToWeekAfterSave = true;
+  // Use the real openAddCliente flow
+  openAddCliente();
+  setTimeout(() => {
+    const nameField = document.getElementById('f-cli-nombre');
+    if (nameField && nombre) nameField.value = nombre;
+    // Focus on next field
+    const telField = document.getElementById('f-cli-tel');
+    if (telField) telField.focus();
+  }, 200);
+}
+
+// Flag: after saving a new cliente, also add it to the current week
+let _addToWeekAfterSave = false;
+
+function confirmarAgregarCliente() {
+  if (!_acsSelectedCliente) return;
+  const weekOffset = parseInt(document.getElementById('acs-semana').value);
+  const wk = getWeekDates(weekOffset);
+
+  // Check not already in that week
+  if (PEDIDOS.some(p => p.id === _acsSelectedCliente.id && p.weekKey === wk.key)) {
+    alert('Este cliente ya está en esa semana.');
+    return;
+  }
+
+  // Create pedido just like genWeek does
+  const c = _acsSelectedCliente;
+  const nuevoPedido = {
+    id: c.id,
+    weekKey: wk.key,
+    weekLabel: wk.label,
+    nombre: c.nombre,
+    ruta: c.ruta,
+    zona: c.zona || '',
+    notas: c.notas || '',
+    tel: c.tel || '',
+    fmt: c.fmt,
+    seg: c.seg || 'domicilio',
+    pago: 'pendiente',
+    entregado: false,
+    agregadoManual: true
+  };
+
+  PEDIDOS.push(nuevoPedido);
+  savePedidos();
+  pushPedidoSheets(nuevoPedido);
+
+  closeModal('modal-agregar-semana');
+  renderPedidos();
+
+  // Navigate to that week
+  currentWeekOffset = weekOffset;
+  renderPedidos();
+}
+
 renderDashboard();
 renderPedidos();
 </script>
@@ -4136,6 +4309,34 @@ renderPedidos();
 
     <!-- Queue list -->
     <div style="max-height:300px;overflow-y:auto" id="em-queue-list"></div>
+  </div>
+</div>
+
+<!-- MODAL AGREGAR CLIENTE A SEMANA -->
+<div class="modal-overlay" id="modal-agregar-semana" style="z-index:300">
+  <div class="modal" style="width:520px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <h3 style="margin:0">➕ Agregar cliente a la semana</h3>
+      <button class="btn btn-xs" onclick="closeModal('modal-agregar-semana')">✕</button>
+    </div>
+    <div class="form-row">
+      <label>Buscar cliente</label>
+      <input type="text" id="f-acs-search" placeholder="Escribí el nombre..." oninput="renderACSResults()" autocomplete="off">
+    </div>
+    <div id="acs-results" style="max-height:260px;overflow-y:auto;margin-bottom:14px;border:1px solid var(--border);border-radius:8px;display:none"></div>
+    <div id="acs-selected" style="display:none;background:var(--bg2);border-radius:8px;padding:12px;margin-bottom:14px">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:6px">CLIENTE SELECCIONADO</div>
+      <div style="font-weight:600" id="acs-sel-nombre"></div>
+      <div style="font-size:12px;color:var(--text3)" id="acs-sel-detalle"></div>
+      <div style="margin-top:10px">
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Semana</label>
+        <select id="acs-semana" style="font-size:13px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);font-family:inherit;width:100%"></select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" onclick="closeModal('modal-agregar-semana')">Cancelar</button>
+      <button class="btn btn-primary" id="acs-confirm-btn" onclick="confirmarAgregarCliente()" style="display:none">Agregar a la semana</button>
+    </div>
   </div>
 </div>
 </body>
