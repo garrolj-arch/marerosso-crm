@@ -634,49 +634,30 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
 <div id="s-ajustes" class="screen">
   <div class="page-header">
     <div class="page-header-left">
-      <h2>⚙️ Ajustes de conexión</h2>
-      <p>Conectá la app con Google Sheets para sincronización en tiempo real</p>
+      <h2>⚙️ Ajustes</h2>
+      <p>Conexión con Supabase y sincronización de datos</p>
     </div>
   </div>
 
   <div class="card" style="max-width:620px">
-    <div class="card-title">🔗 Google Sheets API</div>
+    <div class="card-title">🟢 Supabase — Base de datos en la nube</div>
     <p style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6">
-      Pegá acá la URL del Apps Script que publicaste como Web App. 
-      Todos los cambios se sincronizarán automáticamente con tu Google Sheet.
+      La app está conectada directamente a Supabase. Todos los cambios se sincronizan automáticamente en tiempo real — sin configuración adicional.
     </p>
-    <div class="form-row">
-      <label>URL del Apps Script (Web App)</label>
-      <input type="url" id="f-api-url" placeholder="https://script.google.com/macros/s/.../exec" style="font-size:12px;font-family:monospace">
-    </div>
-    <div style="display:flex;gap:8px;margin-top:4px">
-      <button class="btn btn-primary" onclick="saveAPIUrl()">💾 Guardar y conectar</button>
-      <button class="btn" onclick="testAPIUrl()">🔍 Probar conexión</button>
-      <button class="btn" onclick="syncAll()" style="margin-left:auto">🔄 Sincronizar todo ahora</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="testSupabase()">🔍 Probar conexión</button>
+      <button class="btn" onclick="syncAll()">🔄 Sincronizar todo ahora</button>
     </div>
     <div id="api-test-result" style="margin-top:12px;font-size:13px;min-height:20px"></div>
   </div>
 
   <div class="card" style="max-width:620px;margin-top:16px">
-    <div class="card-title">📤 Cargar clientes al Sheets</div>
+    <div class="card-title">📤 Migrar clientes a Supabase</div>
     <p style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6">
-      La primera vez que conectés, usá este botón para subir todos los clientes actuales 
-      de la app hacia Google Sheets. Solo es necesario hacerlo una vez.
+      La primera vez, subí todos los clientes actuales a Supabase. Solo es necesario una vez.
     </p>
-    <button class="btn btn-success" onclick="uploadAllClientes()">⬆️ Subir todos los clientes a Sheets</button>
+    <button class="btn btn-success" onclick="uploadAllClientes()">⬆️ Subir todos los clientes a Supabase</button>
     <div id="upload-result" style="margin-top:12px;font-size:13px;min-height:20px"></div>
-  </div>
-
-  <div class="card" style="max-width:620px;margin-top:16px;background:var(--bg2)">
-    <div class="card-title" style="font-size:14px">📋 Instrucciones rápidas</div>
-    <ol style="font-size:13px;color:var(--text2);line-height:2;padding-left:18px">
-      <li>Abrí tu Google Sheet → <strong>Extensiones → Apps Script</strong></li>
-      <li>Borrá todo el contenido y pegá el script que te di</li>
-      <li>Ejecutá la función <strong>setup()</strong> (solo una vez)</li>
-      <li>Publicá: <strong>Implementar → Nueva implementación → Web App</strong></li>
-      <li>En "Ejecutar como": <strong>Yo</strong> · En "Quién puede acceder": <strong>Cualquiera</strong></li>
-      <li>Copiá la URL y pegala arriba</li>
-    </ol>
   </div>
 </div>
 
@@ -950,16 +931,70 @@ const DEFAULT_MOVIMIENTOS = [];
 
 // ═══════════════════════════════════════════════
 // ═══════════════════════════════════════════════
-// STATE — Google Sheets como base de datos central
+// STATE — Supabase como base de datos central
 // localStorage como caché local para velocidad
 // ═══════════════════════════════════════════════
 
-// 🔑 URL del Apps Script — se configura en la pantalla de ajustes
-const SHEETS_KEY = 'mr_api_url';
-function getSheetsURL() { return lsGet(SHEETS_KEY) || ''; }
+const SUPA_URL = 'https://dlrfcibanmxipvhucnao.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRscmZjaWJhbm14aXB2aHVjbmFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3MTI4ODAsImV4cCI6MjA5NTI4ODg4MH0.oRuRJ5_z8mSHBa_be5KQYKr7A5PywRYXHwo3SqSVRug';
 
 function lsGet(k){ try{ return localStorage.getItem(k); } catch(e){ return null; } }
 function lsSet(k,v){ try{ localStorage.setItem(k,v); } catch(e){} }
+
+// ── Supabase REST API helpers ─────────────────
+async function sbGet(table, params='') {
+  const res = await fetch(`${SUPA_URL}/rest/v1/${table}?${params}`, {
+    headers: {
+      'apikey': SUPA_KEY,
+      'Authorization': `Bearer ${SUPA_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function sbUpsert(table, data) {
+  const res = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPA_KEY,
+      'Authorization': `Bearer ${SUPA_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates'
+    },
+    body: JSON.stringify(Array.isArray(data) ? data : [data])
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.status === 204 ? {} : res.json();
+}
+
+async function sbDelete(table, filter) {
+  const res = await fetch(`${SUPA_URL}/rest/v1/${table}?${filter}`, {
+    method: 'DELETE',
+    headers: {
+      'apikey': SUPA_KEY,
+      'Authorization': `Bearer ${SUPA_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return {};
+}
+
+// ── Sync indicator ────────────────────────────
+function showSync(status, msg) {
+  const el = document.getElementById('sync-indicator');
+  if (!el) return;
+  const map = {
+    idle:    {icon:'☁️', txt:'',                    color:'var(--text3)'},
+    syncing: {icon:'🔄', txt:'Sincronizando...',     color:'var(--amber)'},
+    ok:      {icon:'✅', txt:'Sincronizado',          color:'var(--green)'},
+    error:   {icon:'⚠️', txt: msg||'Sin conexión',   color:'#C0392B'}
+  };
+  const s = map[status] || map.idle;
+  el.innerHTML = `<span style="color:${s.color};font-size:12px">${s.icon} ${s.txt}</span>`;
+}
 
 // ── SYNC STATUS UI ───────────────────────────────
 let _syncStatus = 'idle'; // idle | syncing | ok | error
@@ -1032,51 +1067,48 @@ async function apiPost(action, data) {
 
 // ── CLIENTES ─────────────────────────────────────
 function loadState() {
-  // Always start from localStorage cache; Sheets sync happens on load event
   try {
     const saved = lsGet('mr_clientes');
     if (saved) return JSON.parse(saved);
-    // No cache: use DEFAULT_CLIENTES as seed (will be overwritten by Sheets sync)
     return DEFAULT_CLIENTES.map(c=>({...c}));
   } catch(e) { return DEFAULT_CLIENTES.map(c=>({...c})); }
 }
 
+function sanitizeCliente(c) {
+  return {
+    ...c,
+    id: Number(c.id),
+    tel: c.tel !== undefined && c.tel !== null ? String(c.tel).replace(/[^0-9]/g,'') : '',
+    nombre: c.nombre ? String(c.nombre) : '',
+    zona: c.zona ? String(c.zona) : '',
+    notas: c.notas ? String(c.notas) : '',
+    ruta: c.ruta ? String(c.ruta) : '',
+    seg: c.seg ? String(c.seg) : 'domicilio',
+    estado: c.estado ? String(c.estado) : 'activo',
+    fmt: Array.isArray(c.fmt) ? c.fmt : (typeof c.fmt === 'string' ? JSON.parse(c.fmt || '[]') : [])
+  };
+}
+
 async function syncClientesFromSheets() {
-  const url = getSheetsURL();
-  if (!url) return;
   showSync('syncing');
   try {
-    const data = await apiGet('getClientes');
+    const data = await sbGet('clientes', 'order=nombre');
     if (Array.isArray(data) && data.length > 0) {
-      // Sanitize: ensure all fields are correct types (Sheets may return numbers for tel)
-      CLIENTES = data.map(c => ({
-        ...c,
-        id: Number(c.id),
-        tel: c.tel !== undefined && c.tel !== null ? String(c.tel).replace(/[^0-9]/g,'') : '',
-        nombre: c.nombre ? String(c.nombre) : '',
-        zona: c.zona ? String(c.zona) : '',
-        notas: c.notas ? String(c.notas) : '',
-        ruta: c.ruta ? String(c.ruta) : '',
-        seg: c.seg ? String(c.seg) : 'domicilio',
-        estado: c.estado ? String(c.estado) : 'activo',
-        fmt: Array.isArray(c.fmt) ? c.fmt : (typeof c.fmt === 'string' ? JSON.parse(c.fmt || '[]') : [])
-      }));
+      CLIENTES = data.map(sanitizeCliente);
       lsSet('mr_clientes', JSON.stringify(CLIENTES));
       NID = Math.max(...CLIENTES.map(c=>c.id), 0) + 1;
       showSync('ok');
       renderDashboard();
       renderClientes();
-      renderWA(); // always re-render WA after clientes load
-    } else if (Array.isArray(data) && data.length === 0) {
-      showSync('ok');
       renderWA();
     } else {
       showSync('ok');
+      renderWA();
     }
   } catch(e) {
-    showSync('error', 'Error al leer Sheets');
-    renderWA(); // render with local data if Sheets fails
-    console.error('Sheets sync error:', e);
+    showSync('error', 'Error al conectar con Supabase');
+    renderWA();
+    console.error('Supabase sync error:', e);
   }
 }
 
@@ -1085,27 +1117,32 @@ function saveState() {
 }
 
 async function saveClienteSheets(cliente) {
-  const url = getSheetsURL();
-  if (!url) return; // solo local si no hay URL
   try {
     showSync('syncing');
-    await apiPost('saveCliente', cliente);
+    const row = {
+      id: cliente.id,
+      nombre: cliente.nombre,
+      tel: cliente.tel || '',
+      seg: cliente.seg || 'domicilio',
+      ruta: cliente.ruta || 'lunes',
+      zona: cliente.zona || '',
+      notas: cliente.notas || '',
+      fmt: cliente.fmt,
+      estado: cliente.estado || 'activo',
+      freq: cliente.freq || 'semanal'
+    };
+    await sbUpsert('clientes', row);
     showSync('ok');
   } catch(e) {
-    showSync('error', 'No se pudo guardar en Sheets');
+    showSync('error', 'No se pudo guardar');
+    console.error('saveCliente error:', e);
   }
 }
 
 async function deleteClienteSheets(id) {
-  const url = getSheetsURL();
-  if (!url) return;
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      body: JSON.stringify({action:'deleteCliente', id})
-    });
-    await res.json();
-  } catch(e) { console.error('delete error', e); }
+    await sbDelete('clientes', `id=eq.${id}`);
+  } catch(e) { console.error('deleteCliente error:', e); }
 }
 
 // ── MOVIMIENTOS ──────────────────────────────────
@@ -1128,14 +1165,29 @@ function loadPedidos() {
 }
 
 async function syncPedidosFromSheets(weekKey) {
-  const url = getSheetsURL();
-  if (!url) return;
   try {
-    const data = await apiGet('getPedidos', {semana: weekKey});
+    const data = await sbGet('pedidos', `week_key=eq.${weekKey}`);
     if (Array.isArray(data) && data.length > 0) {
-      // Merge: reemplazar pedidos de esa semana con los de Sheets
+      const mapped = data.map(p => ({
+        id: Number(p.id),
+        weekKey: p.week_key,
+        weekLabel: p.week_label || '',
+        nombre: p.nombre,
+        ruta: p.ruta || '',
+        zona: p.zona || '',
+        notas: p.notas || '',
+        tel: p.tel ? String(p.tel) : '',
+        fmt: Array.isArray(p.fmt) ? p.fmt : JSON.parse(p.fmt || '[]'),
+        seg: p.seg || 'domicilio',
+        pago: p.pago || 'pendiente',
+        entregado: p.entregado || false,
+        notaCobro: p.nota_cobro || '',
+        agregadoManual: p.agregado_manual || false,
+        esEntregaRapida: p.es_entrega_rapida || false,
+        autoKey: p.auto_key || ''
+      }));
       PEDIDOS = PEDIDOS.filter(p => p.weekKey !== weekKey);
-      PEDIDOS = [...PEDIDOS, ...data];
+      PEDIDOS = [...PEDIDOS, ...mapped];
       lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
     }
   } catch(e) { console.error('Pedidos sync error:', e); }
@@ -1145,23 +1197,39 @@ function savePedidos() {
   lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
 }
 
-// Push a single pedido to Sheets (called after any state change)
-async function pushPedidoSheets(pedido) {
-  if (!getSheetsURL()) return;
-  try { await apiPost('savePedido', pedido); } catch(e) { console.warn('pushPedido error', e); }
+function pedidoToRow(pedido) {
+  return {
+    id: pedido.id,
+    week_key: pedido.weekKey,
+    week_label: pedido.weekLabel || '',
+    nombre: pedido.nombre,
+    ruta: pedido.ruta || '',
+    zona: pedido.zona || '',
+    notas: pedido.notas || '',
+    tel: pedido.tel ? String(pedido.tel) : '',
+    fmt: pedido.fmt,
+    seg: pedido.seg || 'domicilio',
+    pago: pedido.pago || 'pendiente',
+    entregado: pedido.entregado || false,
+    nota_cobro: pedido.notaCobro || '',
+    agregado_manual: pedido.agregadoManual || false,
+    es_entrega_rapida: pedido.esEntregaRapida || false,
+    auto_key: pedido.autoKey || ''
+  };
 }
 
-// Push multiple pedidos at once (used for bulk sync)
+async function pushPedidoSheets(pedido) {
+  try { await sbUpsert('pedidos', pedidoToRow(pedido)); } 
+  catch(e) { console.warn('pushPedido error', e); }
+}
+
 async function pushPedidosBulk(pedidos) {
-  for (const p of pedidos) await pushPedidoSheets(p);
+  try { await sbUpsert('pedidos', pedidos.map(pedidoToRow)); }
+  catch(e) { console.warn('pushPedidosBulk error', e); }
 }
 
 async function savePedidoSheets(pedido) {
-  const url = getSheetsURL();
-  if (!url) return;
-  try {
-    await apiPost('savePedido', pedido);
-  } catch(e) { console.error('savePedido error', e); }
+  await pushPedidoSheets(pedido);
 }
 function loadWATemplate() {
   try {
@@ -2913,20 +2981,20 @@ function saveConfirmaciones() {
 }
 
 async function pushConfirmacionesSheets() {
-  const url = getSheetsURL();
-  if (!url) return;
   try {
-    await apiPost('saveConfirmaciones', {key:'CONFIRMACIONES', value: JSON.stringify(CONFIRMACIONES)});
+    await sbUpsert('kv_store', {
+      key: 'CONFIRMACIONES',
+      value: JSON.stringify(CONFIRMACIONES),
+      updated_at: new Date().toISOString()
+    });
   } catch(e) { console.warn('pushConf error', e); }
 }
 
 async function syncConfirmacionesFromSheets() {
-  const url = getSheetsURL();
-  if (!url) return;
   try {
-    const data = await apiGet('getConfirmaciones');
-    if (data && data.value) {
-      CONFIRMACIONES = JSON.parse(data.value);
+    const data = await sbGet('kv_store', `key=eq.CONFIRMACIONES`);
+    if (data && data.length > 0 && data[0].value) {
+      CONFIRMACIONES = JSON.parse(data[0].value);
       lsSet('mr_confirmaciones', JSON.stringify(CONFIRMACIONES));
     }
   } catch(e) { console.warn('syncConf error', e); }
@@ -3918,38 +3986,21 @@ function getClienteData(pedido) {
 // ═══════════════════════════════════════════════
 
 function renderAjustes() {
-  const url = getSheetsURL();
-  const input = document.getElementById('f-api-url');
-  if (input && url) input.value = url;
+  testSupabase();
 }
 
-function saveAPIUrl() {
-  const url = document.getElementById('f-api-url').value.trim();
-  if (!url.startsWith('https://script.google.com')) {
-    document.getElementById('api-test-result').innerHTML =
-      '<span style="color:#C0392B">❌ La URL debe empezar con https://script.google.com</span>';
-    return;
-  }
-  lsSet(SHEETS_KEY, url);
-  document.getElementById('api-test-result').innerHTML =
-    '<span style="color:var(--green)">✅ URL guardada. Probando conexión...</span>';
-  testAPIUrl();
-}
-
-async function testAPIUrl() {
+async function testSupabase() {
   const el = document.getElementById('api-test-result');
-  el.innerHTML = '🔄 Probando...';
+  if (el) el.innerHTML = '🔄 Probando conexión con Supabase...';
+  showSync('syncing');
   try {
-    const data = await apiGet('ping');
-    if (data && data.ok) {
-      el.innerHTML = '<span style="color:var(--green)">✅ Conexión exitosa · ' + data.ts + '</span>';
+    const data = await sbGet('clientes', 'limit=1');
+    if (Array.isArray(data)) {
+      if (el) el.innerHTML = '<span style="color:var(--green)">✅ Conexión exitosa con Supabase · ' + new Date().toLocaleTimeString() + '</span>';
       showSync('ok');
-    } else {
-      el.innerHTML = '<span style="color:#C0392B">❌ Respuesta inesperada del servidor</span>';
-      showSync('error');
     }
   } catch(e) {
-    el.innerHTML = '<span style="color:#C0392B">❌ Error: ' + e.message + '</span>';
+    if (el) el.innerHTML = '<span style="color:#C0392B">❌ Error: ' + e.message + '</span>';
     showSync('error');
   }
 }
@@ -3958,37 +4009,48 @@ async function syncAll() {
   showSync('syncing');
   await syncClientesFromSheets();
   await syncConfirmacionesFromSheets();
-  const wk = getWeekDates(rutaWeekOffset || 0);
-  await syncPedidosFromSheets(wk.key);
-  const localPedidos = PEDIDOS.filter(p => p.weekKey === wk.key);
-  if (localPedidos.length) await pushPedidosBulk(localPedidos);
+  const wkCurr = getWeekDates(0);
+  const wkNext = getWeekDates(1);
+  await syncPedidosFromSheets(wkCurr.key);
+  await syncPedidosFromSheets(wkNext.key);
   renderDashboard();
   renderClientes();
   renderRuta();
   renderPedidos();
   renderConfirmaciones();
+  renderCobros();
   showSync('ok');
 }
 
 async function uploadAllClientes() {
   const el = document.getElementById('upload-result');
-  const url = getSheetsURL();
-  if (!url) {
-    el.innerHTML = '<span style="color:#C0392B">❌ Primero guardá la URL del Apps Script</span>';
-    return;
+  el.innerHTML = '🔄 Subiendo ' + CLIENTES.length + ' clientes a Supabase...';
+  try {
+    // Upload in batches of 50
+    const batch = 50;
+    let ok = 0;
+    for (let i = 0; i < CLIENTES.length; i += batch) {
+      const chunk = CLIENTES.slice(i, i + batch).map(c => ({
+        id: c.id,
+        nombre: c.nombre,
+        tel: c.tel || '',
+        seg: c.seg || 'domicilio',
+        ruta: c.ruta || 'lunes',
+        zona: c.zona || '',
+        notas: c.notas || '',
+        fmt: c.fmt,
+        estado: c.estado || 'activo',
+        freq: c.freq || 'semanal'
+      }));
+      await sbUpsert('clientes', chunk);
+      ok += chunk.length;
+      el.innerHTML = '🔄 ' + ok + '/' + CLIENTES.length + ' subidos...';
+    }
+    el.innerHTML = '<span style="color:var(--green)">✅ ' + ok + ' clientes subidos a Supabase</span>';
+    showSync('ok');
+  } catch(e) {
+    el.innerHTML = '<span style="color:#C0392B">❌ Error: ' + e.message + '</span>';
   }
-  el.innerHTML = '🔄 Subiendo ' + CLIENTES.length + ' clientes...';
-  let ok = 0, errors = 0;
-  for (const c of CLIENTES) {
-    try {
-      await apiPost('saveCliente', c);
-      ok++;
-      if (ok % 10 === 0) el.innerHTML = '🔄 ' + ok + '/' + CLIENTES.length + ' subidos...';
-    } catch(e) { errors++; }
-  }
-  el.innerHTML = '<span style="color:var(--green)">✅ ' + ok + ' clientes subidos a Sheets' +
-    (errors ? ' · ⚠️ ' + errors + ' errores' : '') + '</span>';
-  showSync('ok');
 }
 
 // ── Hook saveCliente to also push to Sheets ──────
@@ -3996,14 +4058,12 @@ const _origSaveCliente = typeof saveCliente === 'function' ? saveCliente : null;
 
 // ── Auto-sync on load if URL is configured ───────
 window.addEventListener('load', () => {
-  const url = getSheetsURL();
-  if (url) {
-    setTimeout(async () => {
-      showSync('syncing');
-      // Pull everything from Sheets on startup
+  // Auto-sync from Supabase on every load
+  setTimeout(async () => {
+    showSync('syncing');
+    try {
       await syncClientesFromSheets();
       await syncConfirmacionesFromSheets();
-      // Pull pedidos for current + next week
       const wkCurr = getWeekDates(0);
       const wkNext = getWeekDates(1);
       await syncPedidosFromSheets(wkCurr.key);
@@ -4014,8 +4074,11 @@ window.addEventListener('load', () => {
       renderPedidos();
       renderCobros();
       showSync('ok');
-    }, 600);
-  }
+    } catch(e) {
+      showSync('error', 'Sin conexión');
+      console.error('Load sync error:', e);
+    }
+  }, 400);
 });
 
 // ═══════════════════════════════════════════════
