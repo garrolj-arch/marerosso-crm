@@ -1092,7 +1092,7 @@ function sanitizeCliente(c) {
 async function syncClientesFromSheets() {
   showSync('syncing');
   try {
-    const data = await sbGet('clientes', 'order=nombre');
+    const data = await sbGet('clientes', 'order=nombre&limit=1000');
     if (Array.isArray(data) && data.length > 0) {
       CLIENTES = data.map(sanitizeCliente);
       lsSet('mr_clientes', JSON.stringify(CLIENTES));
