@@ -4025,32 +4025,32 @@ async function syncAll() {
 async function uploadAllClientes() {
   const el = document.getElementById('upload-result');
   el.innerHTML = '🔄 Subiendo ' + CLIENTES.length + ' clientes a Supabase...';
-  try {
-    // Upload in batches of 50
-    const batch = 50;
-    let ok = 0;
-    for (let i = 0; i < CLIENTES.length; i += batch) {
-      const chunk = CLIENTES.slice(i, i + batch).map(c => ({
+  let ok = 0, errors = 0;
+  for (const c of CLIENTES) {
+    try {
+      const row = {
         id: c.id,
-        nombre: c.nombre,
-        tel: c.tel || '',
+        nombre: c.nombre || '',
+        tel: c.tel ? String(c.tel) : '',
         seg: c.seg || 'domicilio',
         ruta: c.ruta || 'lunes',
         zona: c.zona || '',
         notas: c.notas || '',
-        fmt: c.fmt,
+        fmt: Array.isArray(c.fmt) ? c.fmt : [],
         estado: c.estado || 'activo',
         freq: c.freq || 'semanal'
-      }));
-      await sbUpsert('clientes', chunk);
-      ok += chunk.length;
-      el.innerHTML = '🔄 ' + ok + '/' + CLIENTES.length + ' subidos...';
+      };
+      await sbUpsert('clientes', row);
+      ok++;
+      if (ok % 10 === 0) el.innerHTML = '🔄 ' + ok + '/' + CLIENTES.length + ' subidos...';
+    } catch(e) {
+      errors++;
+      console.warn('Error subiendo cliente', c.id, c.nombre, e.message);
     }
-    el.innerHTML = '<span style="color:var(--green)">✅ ' + ok + ' clientes subidos a Supabase</span>';
-    showSync('ok');
-  } catch(e) {
-    el.innerHTML = '<span style="color:#C0392B">❌ Error: ' + e.message + '</span>';
   }
+  el.innerHTML = '<span style="color:var(--green)">✅ ' + ok + ' clientes subidos' +
+    (errors ? ' · ⚠️ ' + errors + ' errores (ver consola)' : '') + '</span>';
+  showSync('ok');
 }
 
 // ── Hook saveCliente to also push to Sheets ──────
