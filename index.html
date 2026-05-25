@@ -3071,9 +3071,9 @@ function renderConfirmaciones() {
   const weekLbl = document.getElementById('conf-week-label');
   if (weekLbl) weekLbl.textContent = confWeekOffset === 0 ? 'Semana actual' : (confWeekOffset > 0 ? 'Próxima semana' : 'Semana pasada');
   // Show/hide "Generar semana" button based on whether week exists
-  const semP = PEDIDOS.filter(p => p.weekKey === wk.key);
+  const semPCheck = PEDIDOS.filter(p => p.weekKey === wk.key);
   const btnGen = document.getElementById('btn-gen-semana');
-  if (btnGen) btnGen.style.display = semP.length === 0 ? 'inline-flex' : 'none';
+  if (btnGen) btnGen.style.display = semPCheck.length === 0 ? 'inline-flex' : 'none';
   const searchQ = (document.getElementById('conf-search')?.value || '').toLowerCase();
   const estadoFilter = window._confEstadoFilter || 'todos';
   
