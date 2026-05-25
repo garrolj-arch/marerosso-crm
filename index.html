@@ -978,18 +978,33 @@ async function apiGet(action, params={}) {
   const url = getSheetsURL();
   if (!url) throw new Error('Sin URL configurada');
   const qs = new URLSearchParams({action, ...params}).toString();
-  const res = await fetch(url + '?' + qs, {
-    redirect: 'follow',
-    mode: 'cors'
+  // Use no-cors iframe trick to bypass CORS on GET requests
+  return new Promise((resolve, reject) => {
+    const cbName = '_cb' + Date.now();
+    const timeout = setTimeout(() => {
+      delete window[cbName];
+      if (document.getElementById(cbName)) document.getElementById(cbName).remove();
+      reject(new Error('Timeout'));
+    }, 15000);
+    window[cbName] = function(data) {
+      clearTimeout(timeout);
+      delete window[cbName];
+      const el = document.getElementById(cbName);
+      if (el) el.remove();
+      if (data && data.error) reject(new Error(data.error));
+      else resolve(data);
+    };
+    const script = document.createElement('script');
+    script.id = cbName;
+    script.src = url + '?' + qs + '&callback=' + cbName;
+    script.onerror = () => {
+      clearTimeout(timeout);
+      delete window[cbName];
+      script.remove();
+      reject(new Error('Error de red'));
+    };
+    document.head.appendChild(script);
   });
-  const text = await res.text();
-  try {
-    const json = JSON.parse(text);
-    if (json.error) throw new Error(json.error);
-    return json;
-  } catch(e) {
-    throw new Error('Respuesta inválida del servidor');
-  }
 }
 
 async function apiPost(action, data) {
@@ -1029,7 +1044,19 @@ async function syncClientesFromSheets() {
   try {
     const data = await apiGet('getClientes');
     if (Array.isArray(data) && data.length > 0) {
-      CLIENTES = data;
+      // Sanitize: ensure all fields are correct types (Sheets may return numbers for tel)
+      CLIENTES = data.map(c => ({
+        ...c,
+        id: Number(c.id),
+        tel: c.tel !== undefined && c.tel !== null ? String(c.tel).replace(/[^0-9]/g,'') : '',
+        nombre: c.nombre ? String(c.nombre) : '',
+        zona: c.zona ? String(c.zona) : '',
+        notas: c.notas ? String(c.notas) : '',
+        ruta: c.ruta ? String(c.ruta) : '',
+        seg: c.seg ? String(c.seg) : 'domicilio',
+        estado: c.estado ? String(c.estado) : 'activo',
+        fmt: Array.isArray(c.fmt) ? c.fmt : (typeof c.fmt === 'string' ? JSON.parse(c.fmt || '[]') : [])
+      }));
       lsSet('mr_clientes', JSON.stringify(CLIENTES));
       NID = Math.max(...CLIENTES.map(c=>c.id), 0) + 1;
       showSync('ok');
