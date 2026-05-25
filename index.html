@@ -237,8 +237,11 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
   .parada { padding: 12px !important; }
   .parada-meta { flex-wrap: wrap; gap: 6px; }
   
-  /* Cobros */
-  .cobro-summary { flex-wrap: wrap; gap: 6px; }
+  /* Cobros mobile */
+  .cobro-summary { flex-direction: column; align-items: flex-start !important; gap: 4px; padding: 12px !important; }
+  .cobro-nombre { max-width: 100% !important; white-space: normal !important; font-size: 15px; font-weight: 600; }
+  .cobro-fmt { font-size: 12px; }
+  .cobro-monto { font-size: 18px !important; }
   
   /* Cards y tablas */
   .card { padding: 14px !important; }
@@ -2913,18 +2916,14 @@ function bloquearConf(weekKey, id) {
   var ex = CONFIRMACIONES[ck] || {};
   var newLocked = !ex.bloqueado;
   if (newLocked) {
+    // Capture current input values before locking (new unified format: fmt_gsp, fmt_gcp, fmt_pcp)
     var fo = Object.assign({}, ex.fmtOverride || {});
-    var p = PEDIDOS.find(function(x){return x.id===id;});
-    if (p) {
-      p.fmt.forEach(function(f) {
-        var fk = 'fmt'+f.u;
-        ['gsp','gcp','pcp'].forEach(function(k) {
-          var inputId = 'ci_'+weekKey.replace(/-/g,'')+'_'+id+'_'+fk+'_'+k;
-          var inp = document.getElementById(inputId);
-          if (inp) fo[fk+'_'+k] = parseInt(inp.value)||0;
-        });
-      });
-    }
+    var wkClean = weekKey.replace(/-/g,'');
+    ['gsp','gcp','pcp'].forEach(function(k) {
+      var inputId = 'ci_'+wkClean+'_'+id+'_'+k;
+      var inp = document.getElementById(inputId);
+      if (inp) fo['fmt_'+k] = parseInt(inp.value)||0;
+    });
     CONFIRMACIONES[ck] = Object.assign({}, ex, {fmtOverride: fo, bloqueado: true});
   } else {
     CONFIRMACIONES[ck] = Object.assign({}, ex, {bloqueado: false});
