@@ -161,6 +161,101 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
 .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
 @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
 
+/* ── MOBILE RESPONSIVE ── */
+@media (max-width: 768px) {
+  /* Sidebar oculto por defecto en móvil */
+  .sidebar {
+    position: fixed;
+    left: -220px;
+    top: 0;
+    height: 100vh;
+    z-index: 200;
+    transition: left 0.25s ease;
+    box-shadow: 4px 0 20px rgba(0,0,0,0.3);
+  }
+  .sidebar.open { left: 0; }
+  
+  /* Overlay oscuro cuando sidebar abierto */
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 199;
+  }
+  .sidebar-overlay.open { display: block; }
+  
+  /* Botón hamburguesa */
+  .mobile-header {
+    display: flex !important;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--text);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .hamburger-btn {
+    background: none;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+  }
+  .mobile-header-title {
+    color: #fff;
+    font-size: 16px;
+    font-family: Georgia, serif;
+    font-weight: bold;
+  }
+  .mobile-header-title span { color: var(--accent3); }
+
+  /* Shell en columna en móvil */
+  .shell { flex-direction: column; }
+  
+  /* Main content ocupa todo */
+  .main { margin-left: 0 !important; }
+  .screen { padding: 16px !important; }
+  .page-header { flex-direction: column; gap: 10px; align-items: flex-start !important; }
+  .page-header-actions { flex-wrap: wrap; gap: 6px; width: 100%; }
+  .week-nav { width: 100%; justify-content: center; }
+  
+  /* Métricas en 2 columnas */
+  .metrics-row { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+  .metric-card { padding: 12px !important; }
+  .metric-card .metric-val { font-size: 22px !important; }
+  
+  /* Confirmaciones — botones en fila compacta */
+  .conf-estado-btns { flex-wrap: wrap; gap: 4px; }
+  .ceb { padding: 8px 10px !important; font-size: 12px !important; min-width: 70px; }
+  .conf-row { padding: 12px !important; }
+  
+  /* Hoja de ruta — paradas más compactas */
+  .parada { padding: 12px !important; }
+  .parada-meta { flex-wrap: wrap; gap: 6px; }
+  
+  /* Cobros */
+  .cobro-summary { flex-wrap: wrap; gap: 6px; }
+  
+  /* Cards y tablas */
+  .card { padding: 14px !important; }
+  .tbl-wrap { overflow-x: auto; }
+  
+  /* Producción en 2 cols */
+  .prod-items { grid-template-columns: 1fr 1fr !important; }
+  
+  /* Botones más grandes para dedos */
+  .btn { min-height: 40px; }
+  .btn-primary { min-height: 44px; font-size: 14px; }
+  
+  /* Filtros en scroll horizontal */
+  .filter-group { overflow-x: auto; flex-wrap: nowrap !important; }
+  .filter-btn { white-space: nowrap; }
+}
+
 /* ── WA ── */
 .wa-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .wa-item:last-child { border-bottom: none; }
@@ -245,8 +340,24 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
 <body>
 <div class="shell">
 
+<!-- MOBILE HEADER (solo visible en móvil) -->
+<div class="mobile-header" style="display:none" id="mobile-header">
+  <button class="hamburger-btn" onclick="toggleSidebar()">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <line x1="3" y1="6" x2="21" y2="6"/>
+      <line x1="3" y1="12" x2="21" y2="12"/>
+      <line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+  </button>
+  <span class="mobile-header-title">Mare <span>Rosso</span></span>
+  <span id="mobile-sync" style="margin-left:auto;font-size:11px;color:rgba(255,255,255,0.5)"></span>
+</div>
+
+<!-- OVERLAY -->
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
 <!-- SIDEBAR -->
-<aside class="sidebar">
+<aside class="sidebar" id="sidebar">
   <div class="sb-logo">
     <h1>Mare <span>Rosso</span></h1>
     <p>Sistema de Gestión</p>
@@ -4326,6 +4437,41 @@ async function uploadPedidosSemana() {
   await pushConfirmacionesSheets();
   el.innerHTML = '<span style="color:var(--green)">✅ ' + ok + ' pedidos subidos a Supabase</span>';
 }
+
+// ── MOBILE SIDEBAR ──────────────────────────────
+function isMobile() { return window.innerWidth <= 768; }
+
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const ov = document.getElementById('sidebar-overlay');
+  sb.classList.toggle('open');
+  ov.classList.toggle('open');
+}
+
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
+// Close sidebar when navigating on mobile
+const _origGoTo = goTo;
+function goTo(screen, el) {
+  _origGoTo(screen, el);
+  if (isMobile()) closeSidebar();
+}
+
+// Show mobile header on small screens
+function checkMobile() {
+  const mh = document.getElementById('mobile-header');
+  if (mh) mh.style.display = isMobile() ? 'flex' : 'none';
+  // Sync indicator on mobile
+  const si = document.getElementById('sync-indicator');
+  const ms = document.getElementById('mobile-sync');
+  if (si && ms) ms.textContent = si.textContent;
+}
+
+window.addEventListener('resize', checkMobile);
+checkMobile();
 
 renderDashboard();
 renderPedidos();
