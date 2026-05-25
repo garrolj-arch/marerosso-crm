@@ -1035,12 +1035,16 @@ async function syncClientesFromSheets() {
       showSync('ok');
       renderDashboard();
       renderClientes();
+      renderWA(); // always re-render WA after clientes load
+    } else if (Array.isArray(data) && data.length === 0) {
+      showSync('ok');
       renderWA();
     } else {
       showSync('ok');
     }
   } catch(e) {
     showSync('error', 'Error al leer Sheets');
+    renderWA(); // render with local data if Sheets fails
     console.error('Sheets sync error:', e);
   }
 }
@@ -1198,7 +1202,7 @@ var goTo = function(id, el) {
     finanzas:renderFinanzas,
     estadisticas:renderEstadisticas,
     confirmaciones:function(){confWeekOffset=0;renderConfirmaciones();},
-    ruta:function(){rutaWeekOffset=0;renderRuta();},
+    ruta:function(){rutaWeekOffset=confWeekOffset;renderRuta();},
     inventario:function(){INVENTARIO=loadInventario();NIID=Math.max(...(INVENTARIO.length?INVENTARIO.map(i=>i.id||0):[0]),0)+1;setTimeout(renderInventario,0);}
   };
   if(renders[id]) renders[id]();
@@ -1698,6 +1702,10 @@ function emSaveSent() {
 }
 
 function openEnvioMasivo() {
+  if (!CLIENTES || CLIENTES.length === 0) {
+    alert('Esperá que carguen los clientes primero (✅ Sincronizado en la esquina inferior)');
+    return;
+  }
   const lista = CLIENTES.filter(c => {
     const mr = fWaRuta === 'todas' || c.ruta === fWaRuta;
     const telClean = (c.tel || '').replace(/\D/g, '');
