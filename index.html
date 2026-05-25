@@ -1398,6 +1398,37 @@ const RDOT = {lunes:'Lun',martes:'Mar',miercoles:'Mié',pickup:'Pick'};
 const FREQ_L = {semanal:'semanal',quincenal:'c/15d',variable:'variable'};
 
 function fmtMonto(fmt) { return fmt.reduce((a,f)=>a+f.q*f.p, 0); }
+
+// Monto usando montoOverride > fmtOverride > default
+function montoConf(p, weekKey) {
+  const conf = getConf(weekKey, p.id);
+  if (conf && conf.montoOverride !== undefined) return conf.montoOverride;
+  const fo = conf && conf.fmtOverride ? conf.fmtOverride : null;
+  if (!fo) return fmtMonto(p.fmt);
+  const p30 = (p.fmt.find(f=>f.u===30)||{p:5000}).p;
+  const p15 = (p.fmt.find(f=>f.u===15)||{p:3000}).p;
+  // Support both old (fmt30_gsp) and new (fmt_gsp) key formats
+  const gsp = fo['fmt_gsp'] !== undefined ? fo['fmt_gsp'] : (fo['fmt30_gsp']||0);
+  const gcp = fo['fmt_gcp'] !== undefined ? fo['fmt_gcp'] : (fo['fmt30_gcp']||0);
+  const pcp = fo['fmt_pcp'] !== undefined ? fo['fmt_pcp'] : ((fo['fmt30_pcp']||0) + (fo['fmt15_pcp']||0));
+  const total = gsp*p30 + gcp*p30 + pcp*p15;
+  return total > 0 ? total : fmtMonto(p.fmt);
+}
+
+// Formato string usando cantidades confirmadas
+function fmtStrConf(p, weekKey) {
+  const conf = getConf(weekKey, p.id);
+  const fo = conf && conf.fmtOverride ? conf.fmtOverride : null;
+  if (!fo) return fmtStr(p.fmt);
+  const parts = [];
+  const gsp = fo['fmt_gsp'] !== undefined ? fo['fmt_gsp'] : (fo['fmt30_gsp']||0);
+  const gcp = fo['fmt_gcp'] !== undefined ? fo['fmt_gcp'] : (fo['fmt30_gcp']||0);
+  const pcp = fo['fmt_pcp'] !== undefined ? fo['fmt_pcp'] : ((fo['fmt30_pcp']||0)+(fo['fmt15_pcp']||0));
+  if (gsp > 0) parts.push(gsp+'×G-SP');
+  if (gcp > 0) parts.push(gcp+'×G-CP');
+  if (pcp > 0) parts.push(pcp+'×P-CP');
+  return parts.length ? parts.join(' + ') : fmtStr(p.fmt);
+}
 function fmtStr(fmt) { return fmt.map(f=>`${f.q}×${f.u}u`).join(' + '); }
 function fmtWA(fmt) { return fmt.map(f=>`*${f.q} ${f.q>1?'cartones':'cartón'} de ${f.u}u*`).join(' + '); }
 function moneyFmt(n) { return '₡'+Math.round(n).toLocaleString('es-CR'); }
@@ -1801,8 +1832,8 @@ function renderCobros() {
           ${pedidos.map(p=>`
             <div class="cobro-summary">
               <div class="cobro-nombre">${p.nombre}</div>
-              <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStr(p.fmt)}</div>
-              <div class="cobro-monto">${moneyFmt(fmtMonto(p.fmt))}</div>
+              <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStrConf(p,'${wkey}')}</div>
+              <div class="cobro-monto" style="cursor:pointer" onclick="editMontoCobro(${p.id},'${wkey}')" title="Toca para editar monto">${moneyFmt(montoConf(p,'${wkey}'))} ✏️</div>
               <div style="min-width:130px;text-align:right">
                 ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none;margin-right:4px">📱 WA</a>`:''}
                 <button class="pay-btn pendiente btn-sm" onclick="togglePago(${p.id},'${wkey}');renderCobros()">
@@ -1818,8 +1849,8 @@ function renderCobros() {
       return `
       <div class="cobro-summary" style="flex-wrap:wrap;gap:6px">
         <div class="cobro-nombre">${p.nombre}</div>
-        <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStr(p.fmt)}</div>
-        <div class="cobro-monto">${moneyFmt(fmtMonto(p.fmt))}</div>
+        <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStrConf(p,getWeekDates(cobrosWeekOffset).key)}</div>
+        <div class="cobro-monto" style="cursor:pointer" onclick="editMontoCobro(${p.id},'${getWeekDates(cobrosWeekOffset).key}')" title="Toca para editar monto">${moneyFmt(montoConf(p,getWeekDates(cobrosWeekOffset).key))} ✏️</div>
         ${notaCobro?`<div style="width:100%;font-size:11px;color:var(--text3);font-style:italic;padding:2px 0">📝 ${notaCobro}</div>`:''}
         <div style="min-width:130px;text-align:right;display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end">
           ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none">📱</a>`:''}
@@ -1831,6 +1862,22 @@ function renderCobros() {
       </div>`;
     }).join('');
   }
+}
+
+function editMontoCobro(clienteId, weekKey) {
+  const p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey);
+  if (!p) return;
+  const montoActual = montoConf(p, weekKey);
+  const nuevo = prompt('Monto a cobrar a ' + p.nombre + ' (¢):', montoActual);
+  if (nuevo === null) return;
+  const montoNuevo = parseInt(nuevo.replace(/[^0-9]/g,''));
+  if (isNaN(montoNuevo)) return;
+  // Save as montoOverride in confirmacion
+  const ck = getConfKey(weekKey, clienteId);
+  const ex = CONFIRMACIONES[ck] || {};
+  CONFIRMACIONES[ck] = Object.assign({}, ex, {montoOverride: montoNuevo});
+  saveConfirmaciones();
+  renderCobros();
 }
 
 function editNotaCobro(clienteId, weekKey) {
@@ -2915,20 +2962,36 @@ function bloquearConf(weekKey, id) {
   var ck = getConfKey(weekKey, id);
   var ex = CONFIRMACIONES[ck] || {};
   var newLocked = !ex.bloqueado;
+  
   if (newLocked) {
-    // Capture current input values before locking (new unified format: fmt_gsp, fmt_gcp, fmt_pcp)
-    var fo = Object.assign({}, ex.fmtOverride || {});
+    // Before locking: save current input values from DOM
     var wkClean = weekKey.replace(/-/g,'');
+    var fo = Object.assign({}, ex.fmtOverride || {});
+    var foundAny = false;
     ['gsp','gcp','pcp'].forEach(function(k) {
-      var inputId = 'ci_'+wkClean+'_'+id+'_'+k;
-      var inp = document.getElementById(inputId);
-      if (inp) fo['fmt_'+k] = parseInt(inp.value)||0;
+      // Try both ID formats
+      var inp = document.getElementById('ci_'+wkClean+'_'+id+'_'+k) ||
+                document.getElementById('ci_'+wkClean+'_'+id+'_fmt_'+k);
+      if (inp) { 
+        fo['fmt_'+k] = parseInt(inp.value)||0; 
+        foundAny = true;
+      }
     });
+    // If no inputs found in DOM, normalize existing fmtOverride keys
+    if (!foundAny && ex.fmtOverride) {
+      ['gsp','gcp','pcp'].forEach(function(k) {
+        var val = ex.fmtOverride['fmt_'+k] !== undefined ? ex.fmtOverride['fmt_'+k] :
+                  (ex.fmtOverride['fmt30_'+k] !== undefined ? ex.fmtOverride['fmt30_'+k] :
+                  (ex.fmtOverride['fmt15_'+k] || 0));
+        fo['fmt_'+k] = val;
+      });
+    }
     CONFIRMACIONES[ck] = Object.assign({}, ex, {fmtOverride: fo, bloqueado: true});
   } else {
     CONFIRMACIONES[ck] = Object.assign({}, ex, {bloqueado: false});
   }
   saveConfirmaciones();
+  pushConfirmacionesSheets();
   renderConfirmaciones();
 }
 
@@ -3227,24 +3290,40 @@ function renderConfirmaciones() {
     const q15 = p.fmt.filter(f => f.u === 15).reduce((a, f) => a + f.q, 0);
     // For 'cambio', use cantOverride if set, otherwise use base quantity
     const cantFinal = conf.cantOverride !== undefined ? conf.cantOverride : (q30 + Math.ceil(q15 / 2));
-    // Sum per-tipo quantities from the new fk_tipo keys
+    // Sum per-tipo quantities — support both new (fmt_gsp) and old (fmt30_gsp) key formats
     const fmtOverride = conf.fmtOverride || {};
-    p.fmt.forEach(function(f) {
-      const fk = 'fmt' + f.u;
-      const defTipo = f.u === 15 ? 'pcp' : (p.seg==='b2b'?'gsp':'gcp');
+    const hasNewKeys = fmtOverride['fmt_gsp'] !== undefined || 
+                       fmtOverride['fmt_gcp'] !== undefined || 
+                       fmtOverride['fmt_pcp'] !== undefined;
+    if (hasNewKeys) {
+      // New format: single set of keys
       ['gsp','gcp','pcp'].forEach(function(k) {
-        const tipoFkKey = fk + '_' + k;
-        let qty = fmtOverride[tipoFkKey] !== undefined ? fmtOverride[tipoFkKey] :
-                  (k === defTipo ? f.q : 0);
+        const qty = fmtOverride['fmt_'+k] || 0;
         if (!qty) return;
-        // Convert to carton equivalents: P-CP = 0.5, others = 1
         const cartEq = k === 'pcp' ? qty * 0.5 : qty;
         totCartones += cartEq;
         if (k === 'gsp') totGSP += cartEq;
         else if (k === 'gcp') totGCP += cartEq;
-        else totPCP += qty; // keep raw count for P-CP display
+        else totPCP += qty;
       });
-    });
+    } else {
+      // Legacy format: per-fmt keys (fmt30_gsp, fmt15_pcp etc)
+      p.fmt.forEach(function(f) {
+        const fk = 'fmt' + f.u;
+        const defTipo = f.u === 15 ? 'pcp' : (p.seg==='b2b'?'gsp':'gcp');
+        ['gsp','gcp','pcp'].forEach(function(k) {
+          const tipoFkKey = fk + '_' + k;
+          let qty = fmtOverride[tipoFkKey] !== undefined ? fmtOverride[tipoFkKey] :
+                    (k === defTipo ? f.q : 0);
+          if (!qty) return;
+          const cartEq = k === 'pcp' ? qty * 0.5 : qty;
+          totCartones += cartEq;
+          if (k === 'gsp') totGSP += cartEq;
+          else if (k === 'gcp') totGCP += cartEq;
+          else totPCP += qty;
+        });
+      });
+    }
   });
 
   // Compra a Diego: todos son cartones de 30u a ₡3.000
@@ -3373,7 +3452,12 @@ function renderFmtSelector(p, conf, weekKey) {
     var tp = TIPOS[k];
     var inputId = 'ci_' + weekKey.replace(/-/g,'') + '_' + p.id + '_' + k;
     // Check fmtOverride first, then fall back to calculated default
-    var qty = fo['fmt_'+k] !== undefined ? fo['fmt_'+k] : (fo[k] !== undefined ? fo[k] : defaults[k]);
+    // Support both old key format (fmt30_gcp) and new format (fmt_gcp)
+    var qty = fo['fmt_'+k] !== undefined ? fo['fmt_'+k] : 
+              (fo[k] !== undefined ? fo[k] :
+              // Legacy: check fmt30_k and fmt15_k  
+              (fo['fmt30_'+k] !== undefined ? fo['fmt30_'+k] :
+              (fo['fmt15_'+k] !== undefined ? fo['fmt15_'+k] : defaults[k])));
     var active = qty > 0;
     var borderColor = active ? tp.color : 'var(--border2)';
     var bgColor = active ? tp.bg : 'var(--bg)';
@@ -3385,7 +3469,7 @@ function renderFmtSelector(p, conf, weekKey) {
     if (isLocked) {
       html += ' disabled';
     } else {
-      html += ' oninput="cqLive(this)" onchange="cqSave(this)"';
+      html += ' oninput="cqLive(this)"';
     }
     html += '>';
     html += '<span style="font-size:9px;font-weight:' + (active?'700':'400') + ';color:' + (active?tp.color:'var(--text3)') + '">' + tp.short + '</span>';
@@ -3395,6 +3479,7 @@ function renderFmtSelector(p, conf, weekKey) {
   return html;
 }
 
+// Single unified cqLive and cqSave
 function cqLive(inp) {
   var qty = parseInt(inp.value) || 0;
   var color = inp.dataset.color;
@@ -3406,40 +3491,24 @@ function cqLive(inp) {
     lbl.style.fontWeight = qty > 0 ? '700' : '400';
     lbl.style.color = qty > 0 ? color : 'var(--text3)';
   }
+  // Save immediately on every keystroke
+  cqSave(inp);
 }
 
 function cqSave(inp) {
   var qty = parseInt(inp.value); if (isNaN(qty)||qty<0) qty=0;
   var weekKey = inp.dataset.wk;
   var id = parseInt(inp.dataset.id);
-  var key = inp.dataset.key;
+  var key = inp.dataset.key; // e.g. "fmt_gcp"
+  if (!weekKey || !id || !key) return;
   var ck = getConfKey(weekKey, id);
   var ex = CONFIRMACIONES[ck] || {};
   var fo = Object.assign({}, ex.fmtOverride||{});
   fo[key] = qty;
   CONFIRMACIONES[ck] = Object.assign({}, ex, {fmtOverride: fo});
   saveConfirmaciones();
-  updateConfMetrics();
-}
-
-
-function cqLive(inp, color, bg) {
-  var qty = parseInt(inp.value) || 0;
-  inp.style.borderColor = qty > 0 ? color : 'var(--border2)';
-  inp.style.background = qty > 0 ? bg : 'var(--bg)';
-  var lbl = inp.nextElementSibling;
-  if (lbl) { lbl.style.fontWeight = qty > 0 ? '700' : '400'; lbl.style.color = qty > 0 ? color : 'var(--text3)'; }
-}
-
-function cqSave(weekKey, id, key, val) {
-  var qty = parseInt(val); if (isNaN(qty)||qty<0) qty=0;
-  var ck = getConfKey(weekKey, id);
-  var ex = CONFIRMACIONES[ck] || {};
-  var fo = Object.assign({}, ex.fmtOverride||{});
-  fo[key] = qty;
-  CONFIRMACIONES[ck] = Object.assign({}, ex, {fmtOverride: fo});
-  saveConfirmaciones();
-  updateConfMetrics();
+  // Re-render only the metrics (lightweight update)
+  renderConfirmaciones();
 }
 
 
@@ -3665,20 +3734,40 @@ function renderRuta() {
       let breakdownHTML = '';
       const typeColors = {gsp:{lbl:'G-SP',clr:'#8B3A1E',bg:'#FEF0E7'},gcp:{lbl:'G-CP',clr:'#1A4E8A',bg:'#EBF4FF'},pcp:{lbl:'P-CP',clr:'#2D6A4F',bg:'#EAF7EE'}};
       let typeParts = [];
-      c.fmt.forEach(function(f) {
-        const fk = 'fmt'+f.u;
-        const defTipo = f.u===15?'pcp':(c.seg==='b2b'?'gsp':'gcp');
+      // Check if new format keys exist (fmt_gsp) or fall back to old (fmt30_gsp)
+      const hasNewFo = fo['fmt_gsp'] !== undefined || fo['fmt_gcp'] !== undefined || fo['fmt_pcp'] !== undefined;
+      if (hasNewFo) {
+        // New unified format
+        const p30 = (c.fmt.find(f=>f.u===30)||{p:5000}).p;
+        const p15 = (c.fmt.find(f=>f.u===15)||{p:3000}).p;
         ['gsp','gcp','pcp'].forEach(function(k) {
-          const qty = fo[fk+'_'+k]!==undefined ? fo[fk+'_'+k] : (k===defTipo?f.q:0);
+          const qty = fo['fmt_'+k] || 0;
           if (!qty) return;
           const tc = typeColors[k];
-          typeParts.push({qty, k, tc, pricePerUnit: f.p});
+          const price = k === 'pcp' ? p15 : p30;
+          typeParts.push({qty, k, tc, pricePerUnit: price});
           if (tipoLabel && tipoLabel !== k.toUpperCase().replace('GSP','G-SP').replace('GCP','G-CP').replace('PCP','P-CP')) tipoLabel = 'MIX';
           else tipoLabel = k.toUpperCase().replace('GSP','G-SP').replace('GCP','G-CP').replace('PCP','P-CP');
           cantTotal += (k==='pcp'?qty*0.5:qty);
-          monto += qty * f.p;
+          monto += qty * price;
         });
-      });
+      } else {
+        // Legacy per-fmt format
+        c.fmt.forEach(function(f) {
+          const fk = 'fmt'+f.u;
+          const defTipo = f.u===15?'pcp':(c.seg==='b2b'?'gsp':'gcp');
+          ['gsp','gcp','pcp'].forEach(function(k) {
+            const qty = fo[fk+'_'+k]!==undefined ? fo[fk+'_'+k] : (k===defTipo?f.q:0);
+            if (!qty) return;
+            const tc = typeColors[k];
+            typeParts.push({qty, k, tc, pricePerUnit: f.p});
+            if (tipoLabel && tipoLabel !== k.toUpperCase().replace('GSP','G-SP').replace('GCP','G-CP').replace('PCP','P-CP')) tipoLabel = 'MIX';
+            else tipoLabel = k.toUpperCase().replace('GSP','G-SP').replace('GCP','G-CP').replace('PCP','P-CP');
+            cantTotal += (k==='pcp'?qty*0.5:qty);
+            monto += qty * f.p;
+          });
+        });
+      }
       // Build breakdown badges HTML
       breakdownHTML = typeParts.map(function(tp) {
         return '<span style="font-size:12px;font-weight:700;padding:3px 8px;border-radius:5px;background:'+tp.tc.bg+';color:'+tp.tc.clr+';border:1px solid '+tp.tc.clr+'40">'+tp.qty+' '+tp.tc.lbl+'</span>';
