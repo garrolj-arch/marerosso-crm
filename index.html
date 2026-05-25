@@ -257,9 +257,13 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
       Dashboard
     </div>
-    <div class="nav-item" onclick="goTo('pedidos',this)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
-      Pedidos Semanales
+    <div class="nav-item" onclick="goTo('confirmaciones',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+      Semana
+    </div>
+    <div class="nav-item" onclick="goTo('ruta',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+      Hoja de Ruta
     </div>
     <div class="nav-item" onclick="goTo('cobros',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -268,15 +272,6 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
     <div class="nav-item" onclick="goTo('whatsapp',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
       WhatsApp
-    </div>
-    <div class="nav-section">Semana</div>
-    <div class="nav-item" onclick="goTo('confirmaciones',this)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
-      Confirmaciones
-    </div>
-    <div class="nav-item" onclick="goTo('ruta',this)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
-      Hoja de Ruta
     </div>
     <div class="nav-section">Datos</div>
     <div class="nav-item" onclick="goTo('inventario',this)">
@@ -555,20 +550,27 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
 <div id="s-confirmaciones" class="screen">
   <div class="page-header">
     <div class="page-header-left">
-      <h2>Confirmaciones de pedido</h2>
-      <p id="conf-week-label">Marcá qué confirmó cada cliente y el tipo de huevo</p>
+      <h2>Semana</h2>
+      <p id="conf-week-label">Confirmaciones de pedido</p>
     </div>
     <div class="page-header-actions">
-      <div class="week-nav" style="margin-right:12px">
+      <div class="week-nav" style="margin-right:8px">
         <button class="week-nav-btn" onclick="confWeekNav(-1)">&#8249;</button>
         <span class="week-nav-label" id="conf-week-nav-label">—</span>
         <button class="week-nav-btn" onclick="confWeekNav(1)">&#8250;</button>
       </div>
-      <div class="filter-group" id="fg-conf-estado">
+      <button class="btn" onclick="openAgregarClienteSemana()" style="margin-right:4px">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Agregar cliente
+      </button>
+      <button class="btn btn-primary" onclick="genWeekFromConf()" id="btn-gen-semana" style="display:none">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        Generar semana
+      </button>
+      <div class="filter-group" id="fg-conf-estado" style="margin-left:4px">
         <button class="filter-btn active" onclick="setConfFilter('todos',this)">Todos</button>
-        <button class="filter-btn" onclick="setConfFilter('pendiente',this)">Sin respuesta</button>
+        <button class="filter-btn" onclick="setConfFilter('pendiente',this)">Sin resp.</button>
         <button class="filter-btn" onclick="setConfFilter('confirmado',this)">Confirmados</button>
-        <button class="filter-btn" onclick="setConfFilter('no_responde',this)">No resp.</button>
       </div>
     </div>
   </div>
@@ -3046,13 +3048,32 @@ function confWeekNav(dir) {
   renderConfirmaciones();
 }
 
+function genWeekFromConf() {
+  // Generate week using current confWeekOffset then re-render
+  const prevOffset = currentWeekOffset;
+  currentWeekOffset = confWeekOffset;
+  genWeek();
+  currentWeekOffset = prevOffset;
+  // After genWeek, push to Supabase
+  setTimeout(async () => {
+    const wk = getWeekDates(confWeekOffset);
+    const pedidosSemana = PEDIDOS.filter(p => p.weekKey === wk.key);
+    if (pedidosSemana.length) await pushPedidosBulk(pedidosSemana);
+    renderConfirmaciones();
+  }, 500);
+}
+
 function renderConfirmaciones() {
   const wk = getWeekDates(confWeekOffset);
   // Update nav label
   const navLbl = document.getElementById('conf-week-nav-label');
   if (navLbl) navLbl.textContent = wk.label;
   const weekLbl = document.getElementById('conf-week-label');
-  if (weekLbl) weekLbl.textContent = confWeekOffset === 0 ? 'Semana actual' : (confWeekOffset > 0 ? 'Semana futura' : 'Semana pasada');
+  if (weekLbl) weekLbl.textContent = confWeekOffset === 0 ? 'Semana actual' : (confWeekOffset > 0 ? 'Próxima semana' : 'Semana pasada');
+  // Show/hide "Generar semana" button based on whether week exists
+  const semP = PEDIDOS.filter(p => p.weekKey === wk.key);
+  const btnGen = document.getElementById('btn-gen-semana');
+  if (btnGen) btnGen.style.display = semP.length === 0 ? 'inline-flex' : 'none';
   const searchQ = (document.getElementById('conf-search')?.value || '').toLowerCase();
   const estadoFilter = window._confEstadoFilter || 'todos';
   
@@ -4124,6 +4145,27 @@ window.addEventListener('load', () => {
     }
   }, 400);
 });
+
+// ── Supabase Realtime — instant sync across devices ──
+function initRealtime() {
+  const evtSource = new EventSource(
+    `${SUPA_URL}/realtime/v1/sse?apikey=${SUPA_KEY}&vsn=1.0.0`
+  );
+  // Fallback: poll every 15 seconds for changes
+  setInterval(async () => {
+    try {
+      await syncConfirmacionesFromSheets();
+      const wkCurr = getWeekDates(0);
+      await syncPedidosFromSheets(wkCurr.key);
+      renderConfirmaciones();
+      renderRuta();
+      renderCobros();
+      renderPedidos();
+      showSync('ok');
+    } catch(e) { console.warn('Poll sync error:', e); }
+  }, 15000);
+}
+initRealtime();
 
 // ═══════════════════════════════════════════════
 // AGREGAR CLIENTE A SEMANA MANUALMENTE
