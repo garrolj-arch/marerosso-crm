@@ -659,6 +659,15 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
     <button class="btn btn-success" onclick="uploadAllClientes()">⬆️ Subir todos los clientes a Supabase</button>
     <div id="upload-result" style="margin-top:12px;font-size:13px;min-height:20px"></div>
   </div>
+
+  <div class="card" style="max-width:620px;margin-top:16px">
+    <div class="card-title">📦 Subir pedidos semana actual a Supabase</div>
+    <p style="font-size:13px;color:var(--text2);margin-bottom:16px;line-height:1.6">
+      Subí los pedidos de la semana actual para que Daniel y Ronald los vean en sus dispositivos.
+    </p>
+    <button class="btn btn-primary" onclick="uploadPedidosSemana()">⬆️ Subir pedidos de esta semana</button>
+    <div id="upload-pedidos-result" style="margin-top:12px;font-size:13px;min-height:20px"></div>
+  </div>
 </div>
 
 <!-- MODAL CLIENTE -->
@@ -1224,8 +1233,15 @@ async function pushPedidoSheets(pedido) {
 }
 
 async function pushPedidosBulk(pedidos) {
-  try { await sbUpsert('pedidos', pedidos.map(pedidoToRow)); }
-  catch(e) { console.warn('pushPedidosBulk error', e); }
+  // Push one by one to avoid batch errors
+  let ok = 0;
+  for (const p of pedidos) {
+    try { 
+      await sbUpsert('pedidos', pedidoToRow(p)); 
+      ok++;
+    } catch(e) { console.warn('pushPedido error id=' + p.id, e.message); }
+  }
+  console.log('pushPedidosBulk: ' + ok + '/' + pedidos.length + ' pushed');
 }
 
 async function savePedidoSheets(pedido) {
@@ -4007,20 +4023,43 @@ async function testSupabase() {
 
 async function syncAll() {
   showSync('syncing');
-  await syncClientesFromSheets();
-  await syncConfirmacionesFromSheets();
-  const wkCurr = getWeekDates(0);
-  const wkNext = getWeekDates(1);
-  await syncPedidosFromSheets(wkCurr.key);
-  await syncPedidosFromSheets(wkNext.key);
-  renderDashboard();
-  renderClientes();
-  renderRuta();
-  renderPedidos();
-  renderConfirmaciones();
-  renderCobros();
-  showSync('ok');
+  try {
+    await syncClientesFromSheets();
+    await syncConfirmacionesFromSheets();
+    const wkCurr = getWeekDates(0);
+    const wkNext = getWeekDates(1);
+    await syncPedidosFromSheets(wkCurr.key);
+    await syncPedidosFromSheets(wkNext.key);
+    // Push local pedidos for current week to Supabase
+    const localPedidos = PEDIDOS.filter(p => p.weekKey === wkCurr.key || p.weekKey === wkNext.key);
+    if (localPedidos.length) await pushPedidosBulk(localPedidos);
+    // Push confirmaciones
+    await pushConfirmacionesSheets();
+    renderDashboard();
+    renderClientes();
+    renderRuta();
+    renderPedidos();
+    renderConfirmaciones();
+    renderCobros();
+    showSync('ok');
+  } catch(e) {
+    showSync('error', 'Error al sincronizar');
+    console.error('syncAll error:', e);
+  }
 }
+
+// Auto-sync every 30 seconds
+setInterval(async () => {
+  try {
+    await syncConfirmacionesFromSheets();
+    const wkCurr = getWeekDates(0);
+    await syncPedidosFromSheets(wkCurr.key);
+    renderRuta();
+    renderConfirmaciones();
+    renderCobros();
+    showSync('ok');
+  } catch(e) { console.warn('Auto-sync error:', e); }
+}, 30000);
 
 async function uploadAllClientes() {
   const el = document.getElementById('upload-result');
@@ -4058,6 +4097,11 @@ const _origSaveCliente = typeof saveCliente === 'function' ? saveCliente : null;
 
 // ── Auto-sync on load if URL is configured ───────
 window.addEventListener('load', () => {
+  // Clear old pedidos (before May 25, 2026) — fresh start
+  const cutoff = '2026-05-25';
+  PEDIDOS = PEDIDOS.filter(p => p.weekKey >= cutoff);
+  lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
+  
   // Auto-sync from Supabase on every load
   setTimeout(async () => {
     showSync('syncing');
@@ -4217,6 +4261,28 @@ function confirmarAgregarCliente() {
   // Navigate to that week
   currentWeekOffset = weekOffset;
   renderPedidos();
+}
+
+async function uploadPedidosSemana() {
+  const el = document.getElementById('upload-pedidos-result');
+  const wkCurr = getWeekDates(0);
+  const wkNext = getWeekDates(1);
+  const pedidosSemana = PEDIDOS.filter(p => p.weekKey === wkCurr.key || p.weekKey === wkNext.key);
+  if (!pedidosSemana.length) {
+    el.innerHTML = '<span style="color:var(--text3)">No hay pedidos para subir esta semana. Generá los pedidos primero.</span>';
+    return;
+  }
+  el.innerHTML = '🔄 Subiendo ' + pedidosSemana.length + ' pedidos...';
+  let ok = 0;
+  for (const p of pedidosSemana) {
+    try {
+      await sbUpsert('pedidos', pedidoToRow(p));
+      ok++;
+    } catch(e) { console.warn('Error pedido ' + p.id, e.message); }
+  }
+  // Also push confirmaciones
+  await pushConfirmacionesSheets();
+  el.innerHTML = '<span style="color:var(--green)">✅ ' + ok + ' pedidos subidos a Supabase</span>';
 }
 
 renderDashboard();
