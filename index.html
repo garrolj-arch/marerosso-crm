@@ -1405,14 +1405,27 @@ function montoConf(p, weekKey) {
   if (conf && conf.montoOverride !== undefined) return conf.montoOverride;
   const fo = conf && conf.fmtOverride ? conf.fmtOverride : null;
   if (!fo) return fmtMonto(p.fmt);
-  const p30 = (p.fmt.find(f=>f.u===30)||{p:5000}).p;
-  const p15 = (p.fmt.find(f=>f.u===15)||{p:3000}).p;
+  
+  // Get client from CLIENTES for correct prices
+  const cliente = CLIENTES.find(c => c.id === p.id) || p;
+  const fmt = cliente.fmt || p.fmt || [];
+  const p30 = (fmt.find(f=>f.u===30)||{p:5000}).p;
+  const p15 = (fmt.find(f=>f.u===15)||{p:3000}).p;
+  
   // Support both old (fmt30_gsp) and new (fmt_gsp) key formats
-  const gsp = fo['fmt_gsp'] !== undefined ? fo['fmt_gsp'] : (fo['fmt30_gsp']||0);
-  const gcp = fo['fmt_gcp'] !== undefined ? fo['fmt_gcp'] : (fo['fmt30_gcp']||0);
-  const pcp = fo['fmt_pcp'] !== undefined ? fo['fmt_pcp'] : ((fo['fmt30_pcp']||0) + (fo['fmt15_pcp']||0));
+  const hasNew = fo['fmt_gsp'] !== undefined || fo['fmt_gcp'] !== undefined || fo['fmt_pcp'] !== undefined;
+  let gsp, gcp, pcp;
+  if (hasNew) {
+    gsp = fo['fmt_gsp'] || 0;
+    gcp = fo['fmt_gcp'] || 0;
+    pcp = fo['fmt_pcp'] || 0;
+  } else {
+    gsp = fo['fmt30_gsp'] || 0;
+    gcp = fo['fmt30_gcp'] || 0;
+    pcp = (fo['fmt30_pcp'] || 0) + (fo['fmt15_pcp'] || 0);
+  }
   const total = gsp*p30 + gcp*p30 + pcp*p15;
-  return total > 0 ? total : fmtMonto(p.fmt);
+  return total > 0 ? total : fmtMonto(fmt);
 }
 
 // Formato string usando cantidades confirmadas
@@ -4345,26 +4358,19 @@ window.addEventListener('load', () => {
   }, 400);
 });
 
-// ── Supabase Realtime — instant sync across devices ──
-function initRealtime() {
-  const evtSource = new EventSource(
-    `${SUPA_URL}/realtime/v1/sse?apikey=${SUPA_KEY}&vsn=1.0.0`
-  );
-  // Fallback: poll every 15 seconds for changes
-  setInterval(async () => {
-    try {
-      await syncConfirmacionesFromSheets();
-      const wkCurr = getWeekDates(0);
-      await syncPedidosFromSheets(wkCurr.key);
-      renderConfirmaciones();
-      renderRuta();
-      renderCobros();
-      renderPedidos();
-      showSync('ok');
-    } catch(e) { console.warn('Poll sync error:', e); }
-  }, 15000);
-}
-initRealtime();
+// ── Auto-sync every 15 seconds ──────────────────
+setInterval(async () => {
+  try {
+    await syncConfirmacionesFromSheets();
+    const wkCurr = getWeekDates(0);
+    await syncPedidosFromSheets(wkCurr.key);
+    renderConfirmaciones();
+    renderRuta();
+    renderCobros();
+    renderPedidos();
+    showSync('ok');
+  } catch(e) { console.warn('Poll sync error:', e); }
+}, 15000);
 
 // ═══════════════════════════════════════════════
 // AGREGAR CLIENTE A SEMANA MANUALMENTE
