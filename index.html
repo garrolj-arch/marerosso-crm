@@ -787,7 +787,7 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
 </div>
 
 <!-- MODAL CLIENTE -->
-<div class="modal-overlay" id="modal-cliente">
+<div class="modal-overlay" id="modal-cliente" style="z-index:400">
   <div class="modal">
     <h3 id="modal-cli-title">Agregar cliente</h3>
     <input type="hidden" id="f-cli-id">
@@ -2237,6 +2237,18 @@ function saveCliente() {
 
   closeModal('modal-cliente');
   renderClientes();
+
+  // If called from Venta Rápida "Nuevo Cliente", reopen Venta Rápida and auto-select the new client
+  if (_vrReturnAfterSave && clienteGuardado) {
+    _vrReturnAfterSave = false;
+    openVentaRapida();
+    setTimeout(() => {
+      selectVRCliente(clienteGuardado.id);
+      document.getElementById('f-vr-search').value = clienteGuardado.nombre;
+      document.getElementById('vr-search-results').style.display = 'none';
+    }, 150);
+    return;
+  }
 
   // If called from "Agregar cliente a semana", add to current week automatically
   if (_addToWeekAfterSave && clienteGuardado) {
@@ -3871,20 +3883,28 @@ function toggleEntregado(clienteId, weekKey) {
   if (p.entregado) {
     const conf = getConf(weekKey, clienteId);
     const fmtOv = conf ? (conf.fmtOverride || {}) : {};
-    const tipoOv = conf ? (conf.tipoPerFmt || {}) : {};
     let gsp=0, gcp=0, pcp=0;
-    p.fmt.forEach(function(f) {
-      const fk = 'fmt'+f.u;
-      const defTipo = f.u===15?'pcp':(p.seg==='b2b'?'gsp':'gcp');
-      ['gsp','gcp','pcp'].forEach(function(k) {
-        const tipoFkKey = fk+'_'+k;
-        let qty = fmtOv[tipoFkKey] !== undefined ? fmtOv[tipoFkKey] : (k===defTipo?f.q:0);
-        if (!qty) return;
-        if(k==='gsp') gsp+=qty;
-        else if(k==='gcp') gcp+=qty;
-        else pcp+=qty;
+    // Use confirmed quantities (fmt_gsp/gcp/pcp) if available, otherwise fall back to client default
+    const hasNewKeys = fmtOv['fmt_gsp'] !== undefined || fmtOv['fmt_gcp'] !== undefined || fmtOv['fmt_pcp'] !== undefined;
+    if (hasNewKeys) {
+      gsp = fmtOv['fmt_gsp'] || 0;
+      gcp = fmtOv['fmt_gcp'] || 0;
+      pcp = fmtOv['fmt_pcp'] || 0;
+    } else {
+      // Fallback: read from old key format or client default
+      p.fmt.forEach(function(f) {
+        const defTipo = f.u===15?'pcp':(p.seg==='b2b'?'gsp':'gcp');
+        const fk = 'fmt'+f.u;
+        ['gsp','gcp','pcp'].forEach(function(k) {
+          const oldKey = fk+'_'+k;
+          let qty = fmtOv[oldKey] !== undefined ? fmtOv[oldKey] : (k===defTipo ? f.q : 0);
+          if (!qty) return;
+          if(k==='gsp') gsp+=qty;
+          else if(k==='gcp') gcp+=qty;
+          else pcp+=qty;
+        });
       });
-    });
+    }
     // Register inventory deduction — P-CP counts as 0.5
     const invKey = 'ruta_'+weekKey+'_'+clienteId;
     if (!INVENTARIO.some(i => i.autoKey===invKey)) {
@@ -4781,16 +4801,16 @@ function clearVRCliente() {
 }
 
 function vrNuevoCliente() {
-  // Save current state and open new client form
-  _addToWeekAfterSave = true;
-  closeModal('modal-venta-rapida');
-  openAddCliente();
+  // Open new client form ON TOP of venta rapida (don't close it)
+  _vrReturnAfterSave = true;
   const nombre = document.getElementById('f-vr-search')?.value?.trim();
+  openAddCliente();
   if (nombre) setTimeout(() => {
     const f = document.getElementById('f-cli-nombre');
     if (f) f.value = nombre;
   }, 200);
 }
+let _vrReturnAfterSave = false;
 
 async function confirmarVentaRapida() {
   if (!_vrCliente) { alert('Seleccioná un cliente primero'); return; }
@@ -4812,18 +4832,19 @@ async function confirmarVentaRapida() {
   if (gcp > 0) newFmt.push({u:30, q: gcp, p: p30});
   if (pcp > 0) newFmt.push({u:15, q: pcp, p: p15});
   
-  // Add or update pedido
+  // Add or update pedido — Venta Rápida siempre es entrega inmediata
   let pedido = PEDIDOS.find(p => p.id === c.id && p.weekKey === wk.key);
   if (!pedido) {
     pedido = {
       id: c.id, weekKey: wk.key, weekLabel: wk.label,
       nombre: c.nombre, ruta: c.ruta, zona: c.zona||'',
       notas: c.notas||'', tel: c.tel||'', fmt: newFmt,
-      seg: c.seg||'domicilio', pago: 'pendiente', entregado: false
+      seg: c.seg||'domicilio', pago: 'pendiente', entregado: true
     };
     PEDIDOS.push(pedido);
   } else {
     pedido.fmt = newFmt;
+    pedido.entregado = true;
   }
   
   // Auto-confirm in CONFIRMACIONES
@@ -4833,6 +4854,22 @@ async function confirmarVentaRapida() {
     fmtOverride: {'fmt_gsp': gsp, 'fmt_gcp': gcp, 'fmt_pcp': pcp},
     bloqueado: true
   });
+
+  // Descontar inventario inmediatamente
+  const invKey = 'ruta_' + wk.key + '_' + c.id;
+  if (!INVENTARIO.some(i => i.autoKey === invKey)) {
+    INVENTARIO.push({
+      id: NIID++,
+      fecha: new Date().toISOString().split('T')[0],
+      tipo: 'entrega',
+      desc: 'Entrega: ' + c.nombre,
+      notas: 'Venta rápida',
+      gsp: -gsp, gcp: -gcp, pcp: -pcp,
+      total: -(gsp + gcp + pcp * 0.5),
+      autoKey: invKey
+    });
+    saveInventario_data();
+  }
   
   savePedidos();
   saveConfirmaciones();
@@ -4841,7 +4878,7 @@ async function confirmarVentaRapida() {
   
   closeModal('modal-venta-rapida');
   
-  // Sync confWeekOffset so Semana shows the right week
+  // Sync offsets so todo queda en la semana correcta
   confWeekOffset = weekOffset;
   rutaWeekOffset = weekOffset;
   cobrosWeekOffset = weekOffset;
