@@ -4744,14 +4744,21 @@ function selectVRCliente(id) {
   if (!_vrCliente) return;
   document.getElementById('f-vr-search').value = _vrCliente.nombre;
   document.getElementById('vr-search-results').style.display = 'none';
-  document.getElementById('vr-cliente-sel').style.display = 'block';
+  document.getElementById('vr-cliente-sel').style.display = 'flex';
   document.getElementById('vr-cli-nombre').textContent = _vrCliente.nombre;
-  document.getElementById('vr-cli-zona').textContent = _vrCliente.zona || '';
-  // Pre-fill default quantities from client format
-  const gcp = _vrCliente.fmt.filter(f=>f.u===30).reduce((a,f)=>a+f.q,0);
-  const pcp = _vrCliente.fmt.filter(f=>f.u===15).reduce((a,f)=>a+f.q,0);
+  document.getElementById('vr-cli-zona').textContent = (_vrCliente.zona||'') + ' · ' + (_vrCliente.ruta||'');
+  // Pre-fill quantities and prices from client format
+  const fmt30 = _vrCliente.fmt.find(f=>f.u===30);
+  const fmt15 = _vrCliente.fmt.find(f=>f.u===15);
+  const gcp = fmt30 ? fmt30.q : 0;
+  const pcp = fmt15 ? fmt15.q : 0;
+  const p30 = fmt30 ? fmt30.p : 5000;
+  const p15 = fmt15 ? fmt15.p : 3000;
   document.getElementById('f-vr-gcp').value = gcp;
   document.getElementById('f-vr-pcp').value = pcp;
+  document.getElementById('f-vr-p-gsp').value = p30;
+  document.getElementById('f-vr-p-gcp').value = p30;
+  document.getElementById('f-vr-p-pcp').value = p15;
   updateVRMonto();
 }
 
@@ -4759,20 +4766,31 @@ function updateVRMonto() {
   const gsp = parseInt(document.getElementById('f-vr-gsp').value)||0;
   const gcp = parseInt(document.getElementById('f-vr-gcp').value)||0;
   const pcp = parseInt(document.getElementById('f-vr-pcp').value)||0;
-  // Use client prices if available
-  const p30 = _vrCliente ? ((_vrCliente.fmt.find(f=>f.u===30)||{p:5000}).p) : 5000;
-  const p15 = _vrCliente ? ((_vrCliente.fmt.find(f=>f.u===15)||{p:3000}).p) : 3000;
-  const total = gsp*p30 + gcp*p30 + pcp*p15;
+  const pgsp = parseInt(document.getElementById('f-vr-p-gsp').value)||0;
+  const pgcp = parseInt(document.getElementById('f-vr-p-gcp').value)||0;
+  const ppcp = parseInt(document.getElementById('f-vr-p-pcp').value)||0;
+  const total = gsp*pgsp + gcp*pgcp + pcp*ppcp;
   document.getElementById('vr-monto-preview').textContent = moneyFmt(total);
 }
 
-// Wire up input events for monto preview
-document.addEventListener('DOMContentLoaded', () => {
-  ['f-vr-gsp','f-vr-gcp','f-vr-pcp'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('input', updateVRMonto);
-  });
-});
+function clearVRCliente() {
+  _vrCliente = null;
+  document.getElementById('f-vr-search').value = '';
+  document.getElementById('vr-cliente-sel').style.display = 'none';
+  document.getElementById('f-vr-search').focus();
+}
+
+function vrNuevoCliente() {
+  // Save current state and open new client form
+  _addToWeekAfterSave = true;
+  closeModal('modal-venta-rapida');
+  openAddCliente();
+  const nombre = document.getElementById('f-vr-search')?.value?.trim();
+  if (nombre) setTimeout(() => {
+    const f = document.getElementById('f-cli-nombre');
+    if (f) f.value = nombre;
+  }, 200);
+}
 
 async function confirmarVentaRapida() {
   if (!_vrCliente) { alert('Seleccioná un cliente primero'); return; }
@@ -4786,10 +4804,12 @@ async function confirmarVentaRapida() {
   const c = _vrCliente;
   
   // Build fmt from quantities
-  const p30 = (c.fmt.find(f=>f.u===30)||{p:5000}).p;
-  const p15 = (c.fmt.find(f=>f.u===15)||{p:3000}).p;
+  const p30 = parseInt(document.getElementById('f-vr-p-gcp').value)||5000;
+  const p15 = parseInt(document.getElementById('f-vr-p-pcp').value)||3000;
+  const pgsp = parseInt(document.getElementById('f-vr-p-gsp').value)||4000;
   const newFmt = [];
-  if (gsp > 0 || gcp > 0) newFmt.push({u:30, q: gsp+gcp, p: p30});
+  if (gsp > 0) newFmt.push({u:30, q: gsp, p: pgsp});
+  if (gcp > 0) newFmt.push({u:30, q: gcp, p: p30});
   if (pcp > 0) newFmt.push({u:15, q: pcp, p: p15});
   
   // Add or update pedido
@@ -4825,7 +4845,7 @@ async function confirmarVentaRapida() {
   renderCobros();
   
   // Show success toast
-  showToast('✅ Venta registrada — ' + c.nombre + ' · ' + moneyFmt(gsp*(p30)+gcp*(p30)+pcp*(p15)));
+  const totalVenta = gsp*pgsp + gcp*p30 + pcp*p15; showToast('✅ Venta registrada — ' + c.nombre + ' · ' + moneyFmt(totalVenta));
 }
 
 function showToast(msg) {
@@ -5032,42 +5052,71 @@ renderPedidos();
 
 <!-- MODAL VENTA RÁPIDA -->
 <div class="modal-overlay" id="modal-venta-rapida" style="z-index:300">
-  <div class="modal" style="width:500px">
+  <div class="modal" style="width:520px;max-height:92vh;overflow-y:auto">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
       <h3 style="margin:0">⚡ Venta rápida</h3>
       <button class="btn btn-xs" onclick="closeModal('modal-venta-rapida')">✕</button>
     </div>
-    <div class="form-row">
+
+    <!-- Búsqueda cliente -->
+    <div class="form-row" style="margin-bottom:8px">
       <label>Cliente</label>
-      <input type="text" id="f-vr-search" placeholder="Buscar cliente..." oninput="renderVRSearch()" autocomplete="off">
+      <input type="text" id="f-vr-search" placeholder="Buscar cliente existente..." oninput="renderVRSearch()" autocomplete="off">
       <div id="vr-search-results" style="border:1px solid var(--border);border-radius:8px;max-height:180px;overflow-y:auto;display:none;margin-top:4px"></div>
     </div>
-    <div id="vr-cliente-sel" style="display:none;background:var(--bg2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px">
-      <span id="vr-cli-nombre" style="font-weight:600"></span>
-      <span id="vr-cli-zona" style="color:var(--text3);margin-left:8px"></span>
+
+    <!-- Cliente seleccionado -->
+    <div id="vr-cliente-sel" style="display:none;background:var(--bg2);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <span id="vr-cli-nombre" style="font-weight:600"></span>
+        <span id="vr-cli-zona" style="color:var(--text3);margin-left:8px;font-size:11px"></span>
+      </div>
+      <button class="btn btn-xs" onclick="clearVRCliente()" style="font-size:10px">Cambiar</button>
     </div>
+
+    <!-- Cantidades + Precios -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
       <div class="form-row">
-        <label style="color:#8B3A1E;font-weight:600">G-SP</label>
-        <input type="number" id="f-vr-gsp" value="0" min="0" style="text-align:center;font-size:16px;font-weight:600">
+        <label style="color:#8B3A1E;font-weight:600;font-size:11px">G-SP · cant.</label>
+        <input type="number" id="f-vr-gsp" value="0" min="0" oninput="updateVRMonto()" style="text-align:center;font-size:16px;font-weight:600">
+        <div style="display:flex;align-items:center;gap:3px;margin-top:3px">
+          <span style="font-size:10px;color:var(--text3)">₡</span>
+          <input type="number" id="f-vr-p-gsp" value="4000" min="0" oninput="updateVRMonto()" style="font-size:11px;width:100%;padding:2px 4px">
+        </div>
       </div>
       <div class="form-row">
-        <label style="color:#1A4E8A;font-weight:600">G-CP</label>
-        <input type="number" id="f-vr-gcp" value="0" min="0" style="text-align:center;font-size:16px;font-weight:600">
+        <label style="color:#1A4E8A;font-weight:600;font-size:11px">G-CP · cant.</label>
+        <input type="number" id="f-vr-gcp" value="0" min="0" oninput="updateVRMonto()" style="text-align:center;font-size:16px;font-weight:600">
+        <div style="display:flex;align-items:center;gap:3px;margin-top:3px">
+          <span style="font-size:10px;color:var(--text3)">₡</span>
+          <input type="number" id="f-vr-p-gcp" value="5000" min="0" oninput="updateVRMonto()" style="font-size:11px;width:100%;padding:2px 4px">
+        </div>
       </div>
       <div class="form-row">
-        <label style="color:#2D6A4F;font-weight:600">P-CP</label>
-        <input type="number" id="f-vr-pcp" value="0" min="0" style="text-align:center;font-size:16px;font-weight:600">
+        <label style="color:#2D6A4F;font-weight:600;font-size:11px">P-CP · cant.</label>
+        <input type="number" id="f-vr-pcp" value="0" min="0" oninput="updateVRMonto()" style="text-align:center;font-size:16px;font-weight:600">
+        <div style="display:flex;align-items:center;gap:3px;margin-top:3px">
+          <span style="font-size:10px;color:var(--text3)">₡</span>
+          <input type="number" id="f-vr-p-pcp" value="3000" min="0" oninput="updateVRMonto()" style="font-size:11px;width:100%;padding:2px 4px">
+        </div>
       </div>
     </div>
+
+    <!-- Semana -->
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <div style="font-size:13px;color:var(--text3)">Semana</div>
       <select id="f-vr-semana" style="font-size:13px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;background:var(--bg)"></select>
     </div>
-    <div id="vr-monto-preview" style="font-size:20px;font-weight:700;font-family:Georgia,serif;color:var(--accent3);text-align:center;margin-bottom:14px">₡0</div>
-    <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn" onclick="closeModal('modal-venta-rapida')">Cancelar</button>
-      <button class="btn btn-primary" onclick="confirmarVentaRapida()">✅ Confirmar venta</button>
+
+    <!-- Monto total -->
+    <div id="vr-monto-preview" style="font-size:24px;font-weight:700;font-family:Georgia,serif;color:var(--accent3);text-align:center;margin-bottom:16px">₡0</div>
+
+    <div style="display:flex;gap:8px;justify-content:space-between;align-items:center">
+      <button class="btn btn-sm" onclick="vrNuevoCliente()" style="font-size:12px">+ Crear cliente nuevo</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeModal('modal-venta-rapida')">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarVentaRapida()">✅ Confirmar venta</button>
+      </div>
     </div>
   </div>
 </div>
