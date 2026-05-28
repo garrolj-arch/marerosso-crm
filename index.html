@@ -4840,12 +4840,20 @@ async function confirmarVentaRapida() {
   await pushConfirmacionesSheets();
   
   closeModal('modal-venta-rapida');
+  
+  // Sync confWeekOffset so Semana shows the right week
+  confWeekOffset = weekOffset;
+  rutaWeekOffset = weekOffset;
+  cobrosWeekOffset = weekOffset;
+  
   renderConfirmaciones();
   renderRuta();
   renderCobros();
+  renderDashboard();
   
   // Show success toast
-  const totalVenta = gsp*pgsp + gcp*p30 + pcp*p15; showToast('✅ Venta registrada — ' + c.nombre + ' · ' + moneyFmt(totalVenta));
+  const totalVenta = gsp*pgsp + gcp*p30 + pcp*p15; 
+  showToast('✅ Venta registrada — ' + c.nombre + ' · ' + moneyFmt(totalVenta));
 }
 
 function showToast(msg) {
