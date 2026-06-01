@@ -1467,9 +1467,12 @@ function getWeekDates(offset=0) {
   const mon = new Date(now); mon.setDate(now.getDate() - day + 1 + offset*7);
   const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
   const opts = {day:'2-digit',month:'short'};
+  // Use local date for weekKey to avoid UTC midnight timezone shift
+  const pad = n => String(n).padStart(2,'0');
+  const localKey = `${mon.getFullYear()}-${pad(mon.getMonth()+1)}-${pad(mon.getDate())}`;
   return { start: mon, end: sun,
     label: `${mon.toLocaleDateString('es-CR',opts)} – ${sun.toLocaleDateString('es-CR',opts)} ${sun.getFullYear()}`,
-    key: mon.toISOString().split('T')[0] };
+    key: localKey };
 }
 function initials(nombre) {
   return nombre.split(' ').slice(0,2).map(w=>w[0]).join('').toUpperCase();
@@ -3965,19 +3968,37 @@ function printRuta(dia, weekKey) {
     const fo = (conf && conf.fmtOverride) || {};
     let monto = 0, breakdown = [];
     
-    item.fmt.forEach(function(f) {
-      const fk = 'fmt'+f.u;
-      const def = f.u===15?'pcp':(item.seg==='b2b'?'gsp':'gcp');
+    // Support both new (fmt_gsp) and old (fmt30_gsp) key formats
+    const hasNewKeys = fo['fmt_gsp']!==undefined || fo['fmt_gcp']!==undefined || fo['fmt_pcp']!==undefined;
+    if (hasNewKeys) {
       ['gsp','gcp','pcp'].forEach(function(k) {
-        const qty = fo[fk+'_'+k]!==undefined ? fo[fk+'_'+k] : (k===def?f.q:0);
+        const qty = fo['fmt_'+k] || 0;
         if (!qty) return;
-        monto += qty * f.p;
+        // Find price from fmt — use 30u price for gsp/gcp, 15u for pcp
+        const fmt30 = item.fmt.find(f=>f.u===30);
+        const fmt15 = item.fmt.find(f=>f.u===15);
+        const precio = k==='pcp' ? (fmt15?fmt15.p:(fmt30?fmt30.p:3000)) : (fmt30?fmt30.p:(fmt15?fmt15.p:5000));
+        monto += qty * precio;
         breakdown.push(qty + ' ' + typeColors[k].lbl);
         if (k==='gsp') headerGSP+=qty;
         else if (k==='gcp') headerGCP+=qty;
         else headerPCP+=qty;
       });
-    });
+    } else {
+      item.fmt.forEach(function(f) {
+        const fk = 'fmt'+f.u;
+        const def = f.u===15?'pcp':(item.seg==='b2b'?'gsp':'gcp');
+        ['gsp','gcp','pcp'].forEach(function(k) {
+          const qty = fo[fk+'_'+k]!==undefined ? fo[fk+'_'+k] : (k===def?f.q:0);
+          if (!qty) return;
+          monto += qty * f.p;
+          breakdown.push(qty + ' ' + typeColors[k].lbl);
+          if (k==='gsp') headerGSP+=qty;
+          else if (k==='gcp') headerGCP+=qty;
+          else headerPCP+=qty;
+        });
+      });
+    }
     if (!breakdown.length) { monto = fmtMonto(item.fmt); breakdown = [item.fmt.map(f=>f.q+'×'+f.u+'u').join('+')]; }
     totalMonto += monto;
     
@@ -4666,36 +4687,33 @@ function captureGPS() {
 // GOOGLE MAPS MULTI-PARADA
 // ═══════════════════════════════════════════════
 function openMapsRuta(dia, weekKey) {
-  // Get all confirmed stops for this day with coordinates
+  // Get confirmed stops only
   const confs = PEDIDOS.filter(p => p.weekKey === weekKey && p.ruta === dia);
-  const clientes_dia = CLIENTES.filter(c => c.ruta === dia && c.estado === 'activo');
-  
   const stops = confs.map(p => {
     const c = CLIENTES.find(x => x.id === p.id);
-    return c || null;
+    if (!c) return null;
+    const conf = getConf(weekKey, p.id);
+    if (!conf || (conf.estado !== 'confirmado' && conf.estado !== 'cambio')) return null;
+    return c;
   }).filter(Boolean);
 
   if (!stops.length) { alert('No hay paradas confirmadas para esta ruta.'); return; }
 
-  // Build waypoints — use lat/lng if available, otherwise zona + Costa Rica
-  const hasCoords = stops.filter(c => c.lat && c.lng);
-  
-  if (hasCoords.length > 1) {
-    // Use coordinates for precise routing
-    const origin = '9.9281,-84.1362'; // Bodega Mare Rosso Santa Ana
-    const waypoints = stops.map(c => 
-      c.lat && c.lng ? `${c.lat},${c.lng}` : encodeURIComponent((c.zona || c.nombre) + ', Costa Rica')
-    ).join('|');
-    const url = `https://www.google.com/maps/dir/${origin}/${waypoints}`;
-    window.open(url, '_blank');
-  } else {
-    // Fallback: text addresses
-    const addresses = stops.map(c => 
-      encodeURIComponent((c.zona ? c.zona + ', ' : '') + (c.notas ? c.notas.substring(0,50) + ', ' : '') + 'Costa Rica')
-    );
-    const origin = encodeURIComponent('Bodega Mare Rosso, Santa Ana, Costa Rica');
-    const url = `https://www.google.com/maps/dir/${origin}/${addresses.join('/')}`;
-    window.open(url, '_blank');
+  // Google Maps dir supports max ~10 waypoints in URL reliably
+  // Use lat/lng if available, otherwise address text
+  const origin = '9.9281,-84.1362'; // Bodega Mare Rosso Santa Ana
+  const waypointList = stops.map(c => {
+    if (c.lat && c.lng) return c.lat + ',' + c.lng;
+    return encodeURIComponent((c.zona ? c.zona + ', ' : '') + 'Costa Rica');
+  });
+
+  // Split into chunks of 9 waypoints max (Google Maps URL limit)
+  const chunk = waypointList.slice(0, 9);
+  const url = 'https://www.google.com/maps/dir/' + origin + '/' + chunk.join('/');
+  window.open(url, '_blank');
+
+  if (waypointList.length > 9) {
+    setTimeout(() => alert('Nota: Google Maps solo muestra las primeras 9 paradas. Quedan ' + (waypointList.length - 9) + ' más.'), 500);
   }
 }
 
