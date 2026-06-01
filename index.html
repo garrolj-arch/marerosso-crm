@@ -324,6 +324,10 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
 .parada-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border); transition: background .1s; }
 .parada-row:hover { background: var(--bg); }
 .parada-row:last-child { border-bottom: none; }
+.parada-drag-handle { cursor: grab; color: var(--text3); padding: 0 6px; font-size: 16px; flex-shrink:0; touch-action: none; }
+.parada-drag-handle:active { cursor: grabbing; }
+.parada-dragging { opacity: 0.4; }
+.parada-drag-over { border-top: 2px solid var(--primary) !important; }
 .parada-num { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; flex-shrink: 0; }
 .parada-info { flex: 1; min-width: 0; }
 .parada-nombre { font-weight: 500; font-size: 13px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
@@ -3408,31 +3412,70 @@ function renderConfirmaciones() {
     </div>
   `;
 
-  // Production summary box
-  const anaGCP = totGCP;
-  const anaPCP = totPCP; // cartones enteros que se parten
+  // Production summary box — with per-day filter
+  function calcProdTotals(filtroRuta) {
+    let gsp=0, gcp=0, pcp=0;
+    semPAll.forEach(function(p) {
+      if (filtroRuta && p.ruta !== filtroRuta) return;
+      const conf = getConf(wk.key, p.id);
+      if (!conf || (conf.estado !== 'confirmado' && conf.estado !== 'cambio')) return;
+      const fo = conf.fmtOverride || {};
+      const hasNew = fo['fmt_gsp']!==undefined || fo['fmt_gcp']!==undefined || fo['fmt_pcp']!==undefined;
+      if (hasNew) {
+        gsp += fo['fmt_gsp']||0; gcp += fo['fmt_gcp']||0; pcp += fo['fmt_pcp']||0;
+      } else {
+        p.fmt.forEach(function(f) {
+          const defTipo = f.u===15?'pcp':(p.seg==='b2b'?'gsp':'gcp');
+          ['gsp','gcp','pcp'].forEach(function(k) {
+            const fk = 'fmt'+f.u+'_'+k;
+            const qty = fo[fk]!==undefined ? fo[fk] : (k===defTipo?f.q:0);
+            if (k==='gsp') gsp+=qty; else if (k==='gcp') gcp+=qty; else pcp+=qty;
+          });
+        });
+      }
+    });
+    return {gsp, gcp, pcp, cart: gsp+gcp+pcp*0.5};
+  }
+
+  const DIAS_RUTA = [
+    {key:'lunes',label:'Lun'},{key:'martes',label:'Mar'},{key:'miercoles',label:'Mié'},
+    {key:'jueves',label:'Jue'},{key:'viernes',label:'Vie'}
+  ];
+  const diasConClientes = DIAS_RUTA.filter(d => semPAll.some(p => p.ruta === d.key));
   const elProd = document.getElementById('conf-produccion');
+  const selectedDia = window._prodDiaFilter || null;
+  const totales = calcProdTotals(selectedDia);
+  const diaTitle = selectedDia ? ('🚚 Carga Ronald — ' + (DIAS_RUTA.find(d=>d.key===selectedDia)?.label||selectedDia) + ' · ' + wk.label) : ('📋 Orden para Ana — semana ' + wk.label);
+
+  const btnDias = [`<button onclick="window._prodDiaFilter=null;renderConfirmaciones()" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border);font-size:12px;cursor:pointer;background:${!selectedDia?'var(--primary)':'var(--bg)'};color:${!selectedDia?'#fff':'var(--text)'};font-weight:${!selectedDia?'600':'400'}">Semana</button>`]
+    .concat(diasConClientes.map(d =>
+      `<button onclick="window._prodDiaFilter='${d.key}';renderConfirmaciones()" style="padding:4px 10px;border-radius:20px;border:1px solid var(--border);font-size:12px;cursor:pointer;background:${selectedDia===d.key?'var(--primary)':'var(--bg)'};color:${selectedDia===d.key?'#fff':'var(--text)'};font-weight:${selectedDia===d.key?'600':'400'}">${d.label}</button>`
+    )).join(' ');
+
   elProd.innerHTML = `
     <div class="prod-box">
-      <div class="prod-title">📋 Orden para Ana — semana ${wk.label}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+        <div class="prod-title" style="margin-bottom:0">${diaTitle}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${btnDias}</div>
+      </div>
       <div class="prod-items">
         <div class="prod-item" style="background:#FEF0E7;border-color:rgba(139,58,30,0.2)">
-          <div class="prod-num" style="color:#8B3A1E">${totGSP}</div>
+          <div class="prod-num" style="color:#8B3A1E">${totales.gsp}</div>
           <div class="prod-lbl">Grandes Sin Plástico</div>
           <div class="prod-sub">B2B / sin empacar</div>
         </div>
         <div class="prod-item" style="background:#DBEAFE;border-color:rgba(26,78,138,0.2)">
-          <div class="prod-num" style="color:#1A4E8A">${anaGCP}</div>
+          <div class="prod-num" style="color:#1A4E8A">${totales.gcp}</div>
           <div class="prod-lbl">Grandes Con Plástico</div>
           <div class="prod-sub">empacar en bolsa</div>
         </div>
         <div class="prod-item" style="background:#D8F3DC;border-color:rgba(45,106,79,0.2)">
-          <div class="prod-num" style="color:#2D6A4F">${anaPCP}</div>
+          <div class="prod-num" style="color:#2D6A4F">${totales.pcp}</div>
           <div class="prod-lbl">Pequeños Con Plástico</div>
           <div class="prod-sub">partir cartón + empacar</div>
         </div>
       </div>
-      
+      <div style="text-align:right;font-size:12px;color:var(--muted);margin-top:6px">${formatCart(totales.cart)} cartones · ₡${(totales.cart*3000).toLocaleString('es-CR')}</div>
     </div>
   `;
 
@@ -3658,6 +3701,85 @@ function getZoneScore(zona, ruta) {
 let rutaWeekOffset = 0;
 function rutaWeekNav(dir) { rutaWeekOffset += dir; renderRuta(); }
 
+// ═══════════════════════════════════════════════
+// RUTA CUSTOM ORDER (drag & drop)
+// ═══════════════════════════════════════════════
+function getRutaOrderKey(dia, weekKey) { return 'ruta_order_' + weekKey + '_' + dia; }
+function getRutaOrder(dia, weekKey) {
+  try { const s = lsGet(getRutaOrderKey(dia, weekKey)); return s ? JSON.parse(s) : null; } catch(e) { return null; }
+}
+function saveRutaOrder(dia, weekKey, order) {
+  try { lsSet(getRutaOrderKey(dia, weekKey), JSON.stringify(order)); } catch(e) {}
+}
+function applyRutaOrder(stops, dia, weekKey) {
+  const order = getRutaOrder(dia, weekKey);
+  if (!order || !order.length) return stops;
+  const sorted = [];
+  order.forEach(id => { const s = stops.find(x => (x.id||x._id) === id); if (s) sorted.push(s); });
+  // append any new stops not in saved order
+  stops.forEach(s => { if (!order.includes(s.id||s._id)) sorted.push(s); });
+  return sorted;
+}
+
+function initDragDrop(dia, weekKey) {
+  const container = document.getElementById('paradas-' + dia);
+  if (!container) return;
+  let dragSrc = null;
+  container.querySelectorAll('.parada-row[draggable]').forEach(row => {
+    row.addEventListener('dragstart', e => {
+      dragSrc = row;
+      row.classList.add('parada-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    row.addEventListener('dragend', () => {
+      row.classList.remove('parada-dragging');
+      container.querySelectorAll('.parada-row').forEach(r => r.classList.remove('parada-drag-over'));
+      // Save new order
+      const newOrder = [...container.querySelectorAll('.parada-row[draggable]')].map(r => parseInt(r.dataset.clientId));
+      saveRutaOrder(dia, weekKey, newOrder);
+      renderRuta();
+    });
+    row.addEventListener('dragover', e => {
+      e.preventDefault();
+      container.querySelectorAll('.parada-row').forEach(r => r.classList.remove('parada-drag-over'));
+      if (row !== dragSrc) row.classList.add('parada-drag-over');
+      e.dataTransfer.dropEffect = 'move';
+    });
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      if (dragSrc && dragSrc !== row) {
+        const allRows = [...container.querySelectorAll('.parada-row[draggable]')];
+        const srcIdx = allRows.indexOf(dragSrc);
+        const tgtIdx = allRows.indexOf(row);
+        if (srcIdx > tgtIdx) row.parentNode.insertBefore(dragSrc, row);
+        else row.parentNode.insertBefore(dragSrc, row.nextSibling);
+      }
+    });
+  });
+}
+
+function openWazeNext(dia, weekKey) {
+  // Find next undelivered stop in saved order
+  const order = getRutaOrder(dia, weekKey);
+  const confs = CLIENTES.filter(c => {
+    if (c.estado !== 'activo' || c.ruta !== dia) return false;
+    const conf = getConf(weekKey, c.id);
+    return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
+  });
+  const sorted = applyRutaOrder(confs, dia, weekKey);
+  const next = sorted.find(c => {
+    const ped = PEDIDOS.find(p => p.id === c.id && p.weekKey === weekKey);
+    return !ped || !ped.entregado;
+  });
+  if (!next) { alert('✅ Todas las paradas entregadas!'); return; }
+  if (next.lat && next.lng) {
+    window.open('https://waze.com/ul?ll=' + next.lat + ',' + next.lng + '&navigate=yes', '_blank');
+  } else {
+    const addr = encodeURIComponent((next.zona || next.nombre) + ', Costa Rica');
+    window.open('https://waze.com/ul?q=' + addr + '&navigate=yes', '_blank');
+  }
+}
+
 function renderRuta() {
   const wk = getWeekDates(rutaWeekOffset);
   const rwEl = document.getElementById('ruta-week-display');
@@ -3711,8 +3833,9 @@ function renderRuta() {
     
     if (!diaConfirmed.length && !diaQuick.length) return '';
     
-    // Sort confirmed clients by zone
-    const sorted = [...diaConfirmed].sort((a,b) => getZoneScore(a.zona, dia) - getZoneScore(b.zona, dia));
+    // Sort confirmed clients: custom order if saved, otherwise by zone
+    const zoneSorted = [...diaConfirmed].sort((a,b) => getZoneScore(a.zona, dia) - getZoneScore(b.zona, dia));
+    const sorted = applyRutaOrder(zoneSorted, dia, wk.key);
     
     // Build totals for header
     let headerGSP=0, headerGCP=0, headerPCP=0, headerHuevos=0;
@@ -3825,7 +3948,8 @@ function renderRuta() {
       if (!tipoLabel) { tipoLabel = c.seg==='b2b'?'G-SP':'G-CP'; monto = fmtMonto(c.fmt); cantTotal = c.fmt.reduce((a,f)=>a+(f.u===15?f.q*0.5:f.q),0); breakdownHTML = '<span>'+tipoLabel+'</span>'; }
       
       const tel = c.tel || '';
-      return `<div class="parada ${entregado?'parada-done':''}">
+      return `<div class="parada parada-row ${entregado?'parada-done':''}" draggable="true" data-client-id="${c.id}">
+        <div class="parada-drag-handle" title="Arrastrar para reordenar">⠿</div>
         <div class="parada-num">${stopNum}</div>
         <div class="parada-info">
           <div class="parada-nombre">${c.nombre}
@@ -3858,10 +3982,10 @@ function renderRuta() {
             <span style="color:#2D6A4F">${headerPCP} P-CP</span>
           </p>
         </div>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="printRuta('${dia}','${wk.key}')">🖨 Imprimir</button>
           <button class="btn btn-sm btn-success" onclick="openMapsRuta('${dia}','${wk.key}')">🗺️ Maps</button>
-          <a href="${buildWazeLink(dia)}" target="_blank" class="btn btn-sm" style="text-decoration:none;background:#33CCFF;color:#fff">🔵 Waze</a>
+          <button class="btn btn-sm" style="background:#33CCFF;color:#fff;border:none" onclick="openWazeNext('${dia}','${wk.key}')">🔵 Waze</button>
           <button class="btn btn-sm btn-primary" onclick="openEntregaRapida('${dia}','${wk.key}')">➕ Entrega</button>
         </div>
       </div>
@@ -3872,9 +3996,16 @@ function renderRuta() {
           <div class="parada-dir">Punto de partida · Carga completa del día</div>
         </div>
       </div>
-      ${stops}
+      <div id="paradas-${dia}">
+        ${stops}
+      </div>
     </div>`;
   }).join('');
+
+  // Init drag & drop for each day after DOM is ready
+  setTimeout(() => {
+    ['lunes','martes','miercoles'].forEach(d => initDragDrop(d, wk.key));
+  }, 50);
 }
 
 function toggleEntregado(clienteId, weekKey) {
@@ -3968,17 +4099,16 @@ function printRuta(dia, weekKey) {
     const fo = (conf && conf.fmtOverride) || {};
     let monto = 0, breakdown = [];
     
-    // Support both new (fmt_gsp) and old (fmt30_gsp) key formats
+    // Use montoConf for accurate monto (handles montoOverride + fmtOverride correctly)
+    const pedidoItem = PEDIDOS.find(p => p.id === item.id && p.weekKey === wkKey);
+    monto = pedidoItem ? montoConf(pedidoItem, wkKey) : fmtMonto(item.fmt);
+
+    // Build breakdown display using confirmed quantities
     const hasNewKeys = fo['fmt_gsp']!==undefined || fo['fmt_gcp']!==undefined || fo['fmt_pcp']!==undefined;
     if (hasNewKeys) {
       ['gsp','gcp','pcp'].forEach(function(k) {
         const qty = fo['fmt_'+k] || 0;
         if (!qty) return;
-        // Find price from fmt — use 30u price for gsp/gcp, 15u for pcp
-        const fmt30 = item.fmt.find(f=>f.u===30);
-        const fmt15 = item.fmt.find(f=>f.u===15);
-        const precio = k==='pcp' ? (fmt15?fmt15.p:(fmt30?fmt30.p:3000)) : (fmt30?fmt30.p:(fmt15?fmt15.p:5000));
-        monto += qty * precio;
         breakdown.push(qty + ' ' + typeColors[k].lbl);
         if (k==='gsp') headerGSP+=qty;
         else if (k==='gcp') headerGCP+=qty;
@@ -3991,7 +4121,6 @@ function printRuta(dia, weekKey) {
         ['gsp','gcp','pcp'].forEach(function(k) {
           const qty = fo[fk+'_'+k]!==undefined ? fo[fk+'_'+k] : (k===def?f.q:0);
           if (!qty) return;
-          monto += qty * f.p;
           breakdown.push(qty + ' ' + typeColors[k].lbl);
           if (k==='gsp') headerGSP+=qty;
           else if (k==='gcp') headerGCP+=qty;
@@ -3999,7 +4128,7 @@ function printRuta(dia, weekKey) {
         });
       });
     }
-    if (!breakdown.length) { monto = fmtMonto(item.fmt); breakdown = [item.fmt.map(f=>f.q+'×'+f.u+'u').join('+')]; }
+    if (!breakdown.length) { breakdown = [item.fmt.map(f=>f.q+'×'+f.u+'u').join('+')]; }
     totalMonto += monto;
     
     const pago = PEDIDOS.find(p=>p.id===item.id&&p.weekKey===wkKey);
@@ -4634,26 +4763,70 @@ checkMobile();
 // ═══════════════════════════════════════════════
 // UBICACIÓN GPS + LINK PARSER
 // ═══════════════════════════════════════════════
-function parseLocationLink(url) {
-  if (!url) return;
-  let lat = null, lng = null;
-  // Google Maps: ?q=lat,lng or @lat,lng or maps.app.goo.gl
+function extractCoordsFromUrl(url) {
   const patterns = [
-    /[?&]q=(-?\d+\.?\d*),(-?\d+\.?\d*)/,
-    /@(-?\d+\.?\d*),(-?\d+\.?\d*)/,
-    /place\/(-?\d+\.?\d*),(-?\d+\.?\d*)/,
-    /ll=(-?\d+\.?\d*),(-?\d+\.?\d*)/,
-    // Waze: ?ll=lat,lng
-    /\?ll=(-?\d+\.?\d*),(-?\d+\.?\d*)/,
+    /[?&]q=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,
+    /@(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,
+    /place\/(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,
+    /[?&]ll=(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,
+    /!3d(-?\d{1,3}\.\d+)!4d(-?\d{1,3}\.\d+)/,
+    /maps\/(-?\d{1,3}\.\d+),(-?\d{1,3}\.\d+)/,
   ];
   for (const p of patterns) {
     const m = url.match(p);
-    if (m) { lat = parseFloat(m[1]); lng = parseFloat(m[2]); break; }
+    if (m) return { lat: parseFloat(m[1]), lng: parseFloat(m[2]) };
   }
-  if (lat && lng) {
-    document.getElementById('f-cli-lat').value = lat;
-    document.getElementById('f-cli-lng').value = lng;
-    document.getElementById('f-cli-loc-status').textContent = '✅ ' + lat.toFixed(5) + ', ' + lng.toFixed(5);
+  return null;
+}
+
+function setLocationCoords(lat, lng) {
+  document.getElementById('f-cli-lat').value = lat;
+  document.getElementById('f-cli-lng').value = lng;
+  const status = document.getElementById('f-cli-loc-status');
+  status.textContent = '✅ ' + lat.toFixed(6) + ', ' + lng.toFixed(6);
+  status.style.color = 'var(--green)';
+}
+
+async function parseLocationLink(url) {
+  if (!url) return;
+  const status = document.getElementById('f-cli-loc-status');
+
+  // Try direct extraction first (works for long URLs)
+  const direct = extractCoordsFromUrl(url);
+  if (direct) { setLocationCoords(direct.lat, direct.lng); return; }
+
+  // Short URL — try to resolve via allorigins proxy
+  const isShort = url.includes('goo.gl') || url.includes('maps.app') || url.includes('bit.ly') || url.length < 60;
+  if (!isShort) {
+    status.textContent = '❌ No se encontraron coordenadas en este link';
+    status.style.color = '#C0392B';
+    return;
+  }
+
+  status.textContent = '🔄 Resolviendo link...';
+  status.style.color = 'var(--amber)';
+
+  try {
+    // Use allorigins to follow the redirect and get the final URL
+    const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(url);
+    const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
+    const data = await res.json();
+    
+    // Try to extract coords from the final URL returned
+    const finalUrl = data.status?.url || '';
+    const fromFinal = extractCoordsFromUrl(finalUrl);
+    if (fromFinal) { setLocationCoords(fromFinal.lat, fromFinal.lng); return; }
+
+    // Also try to extract from the HTML content (Google Maps embeds coords in page)
+    const html = data.contents || '';
+    const fromHtml = extractCoordsFromUrl(html);
+    if (fromHtml) { setLocationCoords(fromHtml.lat, fromHtml.lng); return; }
+
+    status.textContent = '❌ No se pudieron extraer coordenadas. Pegá el link largo de la barra del browser.';
+    status.style.color = '#C0392B';
+  } catch(e) {
+    status.textContent = '❌ Error resolviendo link. Pegá el link largo de la barra del browser.';
+    status.style.color = '#C0392B';
   }
 }
 
