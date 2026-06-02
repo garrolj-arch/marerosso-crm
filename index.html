@@ -1299,6 +1299,24 @@ function loadMovimientos() {
 }
 function saveMovimientos() {
   lsSet('mr_movimientos', JSON.stringify(MOVIMIENTOS));
+  // Push to Supabase kv_store for cross-device sync
+  sbUpsert('kv_store', { key: 'movimientos', value: JSON.stringify(MOVIMIENTOS) }).catch(()=>{});
+}
+
+async function syncMovimientosFromSupabase() {
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/kv_store?key=eq.movimientos&select=value`, {
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
+    });
+    const data = await res.json();
+    if (data && data[0]) {
+      const remote = JSON.parse(data[0].value);
+      if (Array.isArray(remote) && remote.length >= MOVIMIENTOS.length) {
+        MOVIMIENTOS = remote;
+        lsSet('mr_movimientos', JSON.stringify(MOVIMIENTOS));
+      }
+    }
+  } catch(e) { console.warn('syncMovimientos error:', e); }
 }
 
 // ── PEDIDOS ──────────────────────────────────────
@@ -2657,6 +2675,24 @@ function loadInventario() {
 }
 function saveInventario_data() {
   try { lsSet('mr_inventario', JSON.stringify(INVENTARIO)); } catch(e) {}
+  // Push to Supabase kv_store for cross-device sync
+  sbUpsert('kv_store', { key: 'inventario', value: JSON.stringify(INVENTARIO) }).catch(()=>{});
+}
+
+async function syncInventarioFromSupabase() {
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/kv_store?key=eq.inventario&select=value`, {
+      headers: { 'apikey': SUPA_KEY, 'Authorization': `Bearer ${SUPA_KEY}` }
+    });
+    const data = await res.json();
+    if (data && data[0]) {
+      const remote = JSON.parse(data[0].value);
+      if (Array.isArray(remote) && remote.length >= INVENTARIO.length) {
+        INVENTARIO = remote;
+        lsSet('mr_inventario', JSON.stringify(INVENTARIO));
+      }
+    }
+  } catch(e) { console.warn('syncInventario error:', e); }
 }
 let INVENTARIO = loadInventario();
 let NIID = Math.max(...(INVENTARIO.map(i=>i.id)||[0]), 0) + 1;
@@ -3863,18 +3899,25 @@ function renderRuta() {
     [...sorted, ...diaQuick].forEach(item => {
       const conf = getConf(wk.key, item.id);
       const fo = (conf && conf.fmtOverride) || {};
-      const fmt = item.fmt || [];
-      fmt.forEach(function(f) {
-        const fk = 'fmt'+f.u;
-        const defTipo = f.u===15?'pcp':(item.seg==='b2b'?'gsp':'gcp');
-        ['gsp','gcp','pcp'].forEach(function(k) {
-          const qty = fo[fk+'_'+k]!==undefined ? fo[fk+'_'+k] : (k===defTipo?f.q:0);
-          if (!qty) return;
-          if (k==='gsp') { headerGSP+=qty; headerHuevos+=qty*30; }
-          else if (k==='gcp') { headerGCP+=qty; headerHuevos+=qty*30; }
-          else { headerPCP+=qty; headerHuevos+=qty*15; }
+      const hasNew = fo['fmt_gsp']!==undefined || fo['fmt_gcp']!==undefined || fo['fmt_pcp']!==undefined;
+      if (hasNew) {
+        const gsp = fo['fmt_gsp']||0, gcp = fo['fmt_gcp']||0, pcp = fo['fmt_pcp']||0;
+        headerGSP+=gsp; headerGCP+=gcp; headerPCP+=pcp;
+        headerHuevos += gsp*30 + gcp*30 + pcp*15;
+      } else {
+        const fmt = item.fmt || [];
+        fmt.forEach(function(f) {
+          const fk = 'fmt'+f.u;
+          const defTipo = f.u===15?'pcp':(item.seg==='b2b'?'gsp':'gcp');
+          ['gsp','gcp','pcp'].forEach(function(k) {
+            const qty = fo[fk+'_'+k]!==undefined ? fo[fk+'_'+k] : (k===defTipo?f.q:0);
+            if (!qty) return;
+            if (k==='gsp') { headerGSP+=qty; headerHuevos+=qty*30; }
+            else if (k==='gcp') { headerGCP+=qty; headerHuevos+=qty*30; }
+            else { headerPCP+=qty; headerHuevos+=qty*15; }
+          });
         });
-      });
+      }
     });
     
     const diaLabel = dia==='lunes'?'Santa Ana / Escazú / Lindora':dia==='martes'?'Este / Cartago':'Heredia / Alajuela';
@@ -4482,12 +4525,19 @@ async function syncAll() {
     if (localPedidos.length) await pushPedidosBulk(localPedidos);
     // Push confirmaciones
     await pushConfirmacionesSheets();
+    // Sync inventario and movimientos
+    await syncInventarioFromSupabase();
+    await syncMovimientosFromSupabase();
+    NIID = Math.max(...(INVENTARIO.length ? INVENTARIO.map(i=>i.id||0) : [0]), 0) + 1;
+    NMID = Math.max(...(MOVIMIENTOS.length ? MOVIMIENTOS.map(m=>m.id||0) : [0]), 0) + 1;
     renderDashboard();
     renderClientes();
     renderRuta();
     renderPedidos();
     renderConfirmaciones();
     renderCobros();
+    renderInventario();
+    renderFinanzas();
     showSync('ok');
   } catch(e) {
     showSync('error', 'Error al sincronizar');
@@ -4501,9 +4551,15 @@ setInterval(async () => {
     await syncConfirmacionesFromSheets();
     const wkCurr = getWeekDates(0);
     await syncPedidosFromSheets(wkCurr.key);
+    await syncInventarioFromSupabase();
+    await syncMovimientosFromSupabase();
+    NIID = Math.max(...(INVENTARIO.length ? INVENTARIO.map(i=>i.id||0) : [0]), 0) + 1;
+    NMID = Math.max(...(MOVIMIENTOS.length ? MOVIMIENTOS.map(m=>m.id||0) : [0]), 0) + 1;
     renderRuta();
     renderConfirmaciones();
     renderCobros();
+    renderInventario();
+    renderFinanzas();
     showSync('ok');
   } catch(e) { console.warn('Auto-sync error:', e); }
 }, 30000);
