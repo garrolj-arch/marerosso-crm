@@ -717,6 +717,15 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
       </div>
     </div>
   </div>
+  <!-- Search bar -->
+  <div style="padding:0 0 16px 0">
+    <div style="position:relative">
+      <svg style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text3)" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="ruta-search" type="text" placeholder="Buscar cliente en ruta..." 
+        style="width:100%;padding:10px 12px 10px 36px;border:1px solid var(--border);border-radius:var(--r1);font-size:14px;font-family:inherit;background:var(--bg);color:var(--text);box-sizing:border-box"
+        oninput="filterRuta(this.value)">
+    </div>
+  </div>
   <div id="ruta-content"></div>
 </div>
 
@@ -1610,53 +1619,49 @@ function genWeek() {
   renderPedidos();
 }
 
-function togglePago(clienteId, weekKey) {
-  const p = PEDIDOS.find(x=>x.id===clienteId && x.weekKey===weekKey);
-  if(!p) return;
+function togglePago(clienteId, weekKey, vrKey) {
+  // vrKey is used to identify unique venta rapida / entrega rapida pedidos
+  const p = vrKey
+    ? PEDIDOS.find(x => x.vrKey === vrKey || (x.id === clienteId && x.weekKey === weekKey && x.esVentaRapida))
+    : PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
+  if (!p) return;
   const wasPaid = p.pago === 'pagado';
   p.pago = wasPaid ? 'pendiente' : 'pagado';
 
-  // For quick deliveries, a finanzas entry already exists (autoKey: 'er_'+id)
-  // Just update its pago status — do NOT create a duplicate
-  if (p.esEntregaRapida) {
-    const erKey = 'er_' + clienteId;
-    const erMov = MOVIMIENTOS.find(m => m.autoKey === erKey);
-    if (erMov) {
-      erMov.pago = wasPaid ? 'pendiente' : 'sinpe';
+  // Unique key for finanzas entry — use vrKey for rapidas, otherwise standard key
+  const pagoKey = vrKey ? 'pago_vr_' + vrKey : 
+    p.esEntregaRapida ? 'pago_er_' + p.id :
+    'pago_' + weekKey + '_' + clienteId;
+
+  if (!wasPaid) {
+    // Marcar cobrado → registrar en Finanzas
+    const alreadyExists = MOVIMIENTOS.some(m => m.autoKey === pagoKey);
+    if (!alreadyExists) {
+      // Use confirmed monto if available, otherwise fmt default
+      const monto = montoConf(p, weekKey);
+      MOVIMIENTOS.push({
+        id: NMID++,
+        fecha: new Date().toISOString().split('T')[0],
+        tipo: 'venta',
+        desc: p.nombre + (p.esVentaRapida || p.esEntregaRapida ? ' (entrega extra)' : '') + ' — ' + (p.weekLabel || weekKey),
+        monto: monto,
+        pago: 'sinpe',
+        notas: 'Auto-registrado al marcar cobrado',
+        autoKey: pagoKey
+      });
       saveMovimientos();
     }
-    // No new entry created for quick deliveries
   } else {
-    // Regular pedidos: auto-register income in Finanzas when marked as paid
-    if (!wasPaid) {
-      const existKey = `pago_${weekKey}_${clienteId}`;
-      const alreadyExists = MOVIMIENTOS.some(m => m.autoKey === existKey);
-      if (!alreadyExists) {
-        const monto = fmtMonto(p.fmt);
-        MOVIMIENTOS.push({
-          id: NMID++,
-          fecha: new Date().toISOString().split('T')[0],
-          tipo: 'venta',
-          desc: p.nombre + ' — ' + (p.weekLabel || weekKey),
-          monto: monto,
-          pago: 'sinpe',
-          notas: 'Auto-registrado al marcar pagado',
-          autoKey: existKey
-        });
-        saveMovimientos();
-      }
-    } else {
-      // Remove auto-registered income if un-marking paid
-      const existKey = `pago_${weekKey}_${clienteId}`;
-      const idx = MOVIMIENTOS.findIndex(m => m.autoKey === existKey);
-      if (idx !== -1) { MOVIMIENTOS.splice(idx, 1); saveMovimientos(); }
-    }
+    // Desmarcar cobrado → eliminar de Finanzas
+    const idx = MOVIMIENTOS.findIndex(m => m.autoKey === pagoKey);
+    if (idx !== -1) { MOVIMIENTOS.splice(idx, 1); saveMovimientos(); }
   }
 
   savePedidos();
-  if (p) pushPedidoSheets(p); // sync to Sheets
+  if (p) pushPedidoSheets(p);
   renderPedidos();
   renderCobros();
+  renderFinanzas();
 }
 
 function renderPedidos() {
@@ -1793,11 +1798,11 @@ function renderCobros() {
       return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
     });
   } else {
-    // Selected week — only confirmed, changed, or quick delivery
+    // Selected week — only confirmed, changed, quick delivery, or venta rapida
     const wkCob = getWeekDates(cobrosWeekOffset);
     semP = PEDIDOS.filter(p => {
       if (p.weekKey !== wkCob.key) return false;
-      if (p.esEntregaRapida) return true;
+      if (p.esEntregaRapida || p.esVentaRapida) return true;
       const conf = getConf(wkCob.key, p.id);
       return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
     });
@@ -1885,12 +1890,12 @@ function renderCobros() {
           </div>
           ${pedidos.map(p=>`
             <div class="cobro-summary">
-              <div class="cobro-nombre">${p.nombre}</div>
+              <div class="cobro-nombre">${p.nombre}${p.esVentaRapida||p.esEntregaRapida?' <span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:10px;font-weight:600">extra</span>':''}</div>
               <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStrConf(p,'${wkey}')}</div>
               <div class="cobro-monto" style="cursor:pointer" onclick="editMontoCobro(${p.id},'${wkey}')" title="Toca para editar monto">${moneyFmt(montoConf(p,'${wkey}'))} ✏️</div>
               <div style="min-width:130px;text-align:right">
                 ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none;margin-right:4px">📱 WA</a>`:''}
-                <button class="pay-btn pendiente btn-sm" onclick="togglePago(${p.id},'${wkey}');renderCobros()">
+                <button class="pay-btn pendiente btn-sm" onclick="togglePago(${p.id},'${wkey}','${p.vrKey||''}');renderCobros()">
                   Marcar cobrado
                 </button>
               </div>
@@ -1909,7 +1914,7 @@ function renderCobros() {
         <div style="min-width:130px;text-align:right;display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end">
           ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none">📱</a>`:''}
           <button class="btn btn-xs" onclick="editNotaCobro(${p.id},'${getWeekDates(cobrosWeekOffset).key}')" title="Agregar nota de pago">📝</button>
-          <button class="pay-btn ${p.pago} btn-sm" onclick="togglePago(${p.id},'${getWeekDates(cobrosWeekOffset).key}');renderCobros()">
+          <button class="pay-btn ${p.pago} btn-sm" onclick="togglePago(${p.id},'${getWeekDates(cobrosWeekOffset).key}','${p.vrKey||''}');renderCobros()">
             ${p.pago==='pagado'?'✓ Cobrado':'Marcar cobrado'}
           </button>
         </div>
@@ -3207,21 +3212,8 @@ function guardarEntregaRapida() {
     saveState();
   }
   
-  // Auto-register in Finanzas as venta
-  const montoEntrega = fmt.reduce((a,f)=>a+(f.q*f.p),0);
-  if (montoEntrega > 0) {
-    MOVIMIENTOS.push({
-      id: NMID++,
-      fecha: new Date().toISOString().split('T')[0],
-      tipo: 'venta',
-      desc: 'Entrega rápida: ' + nombre,
-      monto: montoEntrega,
-      pago: 'pendiente',
-      notas: (q30>0?q30+'×30u ':'')+(q15>0?q15+'×15u':''),
-      autoKey: 'er_'+tempId
-    });
-    saveMovimientos();
-  }
+  // Finanzas entry will be created automatically when marked as cobrado (togglePago)
+  // No auto-register here — keeps accounting clean
 
   savePedidos();
   // Push entrega rapida pedido to Sheets
@@ -3757,6 +3749,20 @@ function getZoneScore(zona, ruta) {
 
 let rutaWeekOffset = 0;
 function rutaWeekNav(dir) { rutaWeekOffset += dir; renderRuta(); }
+
+function filterRuta(query) {
+  const q = query.toLowerCase().trim();
+  document.querySelectorAll('.parada-row[draggable]').forEach(row => {
+    const nombre = row.querySelector('.parada-nombre')?.textContent?.toLowerCase() || '';
+    row.style.display = (!q || nombre.includes(q)) ? '' : 'none';
+  });
+  // Also hide/show section headers if all paradas in a section are hidden
+  document.querySelectorAll('.ruta-section').forEach(section => {
+    const paradas = section.querySelectorAll('.parada-row[draggable]');
+    const anyVisible = [...paradas].some(p => p.style.display !== 'none');
+    section.style.display = anyVisible || !q ? '' : 'none';
+  });
+}
 
 // ═══════════════════════════════════════════════
 // RUTA CUSTOM ORDER (drag & drop)
@@ -5066,6 +5072,13 @@ function clearVRCliente() {
   document.getElementById('f-vr-search').value = '';
   document.getElementById('vr-cliente-sel').style.display = 'none';
   document.getElementById('f-vr-search').focus();
+  // Set fecha to today by default
+  const fechaEl = document.getElementById('f-vr-fecha');
+  if (fechaEl) {
+    const pad = n => String(n).padStart(2,'0');
+    const now = new Date();
+    fechaEl.value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  }
 }
 
 function vrNuevoCliente() {
@@ -5100,49 +5113,38 @@ async function confirmarVentaRapida() {
   if (gcp > 0) newFmt.push({u:30, q: gcp, p: p30});
   if (pcp > 0) newFmt.push({u:15, q: pcp, p: p15});
   
-  // Add or update pedido — Venta Rápida siempre es entrega inmediata
-  let pedido = PEDIDOS.find(p => p.id === c.id && p.weekKey === wk.key);
-  if (!pedido) {
-    pedido = {
-      id: c.id, weekKey: wk.key, weekLabel: wk.label,
-      nombre: c.nombre, ruta: c.ruta, zona: c.zona||'',
-      notas: c.notas||'', tel: c.tel||'', fmt: newFmt,
-      seg: c.seg||'domicilio', pago: 'pendiente', entregado: true
-    };
-    PEDIDOS.push(pedido);
-  } else {
-    pedido.fmt = newFmt;
-    pedido.entregado = true;
-  }
-  
-  // Auto-confirm in CONFIRMACIONES
-  const ck = getConfKey(wk.key, c.id);
-  CONFIRMACIONES[ck] = Object.assign({}, CONFIRMACIONES[ck]||{}, {
-    estado: 'confirmado',
-    fmtOverride: {'fmt_gsp': gsp, 'fmt_gcp': gcp, 'fmt_pcp': pcp},
-    bloqueado: true
-  });
+  // Always create a NEW independent pedido for Venta Rápida
+  // Use timestamp-based unique ID so Supabase (id, week_key) PK never collides
+  const vrTimestamp = Date.now();
+  const vrUniqueId = 900000000 + (vrTimestamp % 99999999); // large unique numeric ID
+  const vrPedidoKey = 'vr_' + c.id + '_' + vrTimestamp;
+  const vrFecha = document.getElementById('f-vr-fecha')?.value || new Date().toISOString().split('T')[0];
+  const pedido = {
+    id: vrUniqueId, weekKey: wk.key, weekLabel: wk.label,
+    nombre: c.nombre, ruta: c.ruta || 'extra', zona: c.zona||'',
+    notas: c.notas||'', tel: c.tel||'', fmt: newFmt,
+    seg: c.seg||'domicilio', pago: 'pendiente', entregado: true,
+    esVentaRapida: true, vrKey: vrPedidoKey, clienteId: c.id,
+    fechaEntrega: vrFecha, autoKey: vrPedidoKey
+  };
+  PEDIDOS.push(pedido);
 
   // Descontar inventario inmediatamente
-  const invKey = 'ruta_' + wk.key + '_' + c.id;
-  if (!INVENTARIO.some(i => i.autoKey === invKey)) {
-    INVENTARIO.push({
-      id: NIID++,
-      fecha: new Date().toISOString().split('T')[0],
-      tipo: 'entrega',
-      desc: 'Entrega: ' + c.nombre,
-      notas: 'Venta rápida',
-      gsp: -gsp, gcp: -gcp, pcp: -pcp,
-      total: -(gsp + gcp + pcp * 0.5),
-      autoKey: invKey
-    });
-    saveInventario_data();
-  }
+  const invKey = 'inv_vr_' + vrTimestamp;
+  INVENTARIO.push({
+    id: NIID++,
+    fecha: vrFecha,
+    tipo: 'entrega',
+    desc: 'Entrega extra: ' + c.nombre,
+    notas: 'Venta rápida',
+    gsp: -gsp, gcp: -gcp, pcp: -pcp,
+    total: -(gsp + gcp + pcp * 0.5),
+    autoKey: invKey
+  });
+  saveInventario_data();
   
   savePedidos();
-  saveConfirmaciones();
   await pushPedidoSheets(pedido);
-  await pushConfirmacionesSheets();
   
   closeModal('modal-venta-rapida');
   
@@ -5415,10 +5417,14 @@ renderPedidos();
       </div>
     </div>
 
-    <!-- Semana -->
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <!-- Semana y Fecha -->
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div style="font-size:13px;color:var(--text3)">Semana</div>
       <select id="f-vr-semana" style="font-size:13px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;background:var(--bg)"></select>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:13px;color:var(--text3)">Fecha entrega</div>
+      <input type="date" id="f-vr-fecha" style="font-size:13px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-family:inherit;background:var(--bg)">
     </div>
 
     <!-- Monto total -->
