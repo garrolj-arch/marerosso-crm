@@ -1620,18 +1620,22 @@ function genWeek() {
 }
 
 function togglePago(clienteId, weekKey, vrKey) {
-  // vrKey is used to identify unique venta rapida / entrega rapida pedidos
-  const p = vrKey
-    ? PEDIDOS.find(x => x.vrKey === vrKey || (x.id === clienteId && x.weekKey === weekKey && x.esVentaRapida))
-    : PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
+  // Find pedido — use vrKey for rapidas (unique), otherwise by clienteId+weekKey
+  let p;
+  if (vrKey) {
+    p = PEDIDOS.find(x => x.vrKey === vrKey || x.autoKey === vrKey);
+  }
+  if (!p) {
+    p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
+  }
   if (!p) return;
   const wasPaid = p.pago === 'pagado';
   p.pago = wasPaid ? 'pendiente' : 'pagado';
 
-  // Unique key for finanzas entry — use vrKey for rapidas, otherwise standard key
-  const pagoKey = vrKey ? 'pago_vr_' + vrKey : 
-    p.esEntregaRapida ? 'pago_er_' + p.id :
-    'pago_' + weekKey + '_' + clienteId;
+  // Unique key for finanzas — always use vrKey/autoKey for rapidas
+  const pagoKey = (p.vrKey || p.autoKey) && (p.esVentaRapida || p.esEntregaRapida)
+    ? 'pago_' + (p.vrKey || p.autoKey)
+    : 'pago_' + weekKey + '_' + clienteId;
 
   if (!wasPaid) {
     // Marcar cobrado → registrar en Finanzas
@@ -1907,7 +1911,7 @@ function renderCobros() {
       const notaCobro = p.notaCobro || '';
       return `
       <div class="cobro-summary" style="flex-wrap:wrap;gap:6px">
-        <div class="cobro-nombre">${p.nombre}</div>
+        <div class="cobro-nombre">${p.nombre}${p.esVentaRapida||p.esEntregaRapida?' <span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:10px;font-weight:600">extra</span>':''}</div>
         <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStrConf(p,getWeekDates(cobrosWeekOffset).key)}</div>
         <div class="cobro-monto" style="cursor:pointer" onclick="editMontoCobro(${p.id},'${getWeekDates(cobrosWeekOffset).key}')" title="Toca para editar monto">${moneyFmt(montoConf(p,getWeekDates(cobrosWeekOffset).key))} ✏️</div>
         ${notaCobro?`<div style="width:100%;font-size:11px;color:var(--text3);font-style:italic;padding:2px 0">📝 ${notaCobro}</div>`:''}
@@ -3182,27 +3186,33 @@ function guardarEntregaRapida() {
   if (q30 > 0) fmt.push({u:30, q:q30, p:p30});
   if (q15 > 0) fmt.push({u:15, q:q15, p:p15});
   
-  // Add to PEDIDOS for this week
-  const tempId = Date.now();
+  // Always use unique timestamp-based ID so Supabase never overrides existing pedidos
+  const erTimestamp = Date.now();
+  const erUniqueId = 800000000 + (erTimestamp % 99999999);
+  const erKey = 'er_' + erTimestamp;
   const weekLabel = (PEDIDOS.find(p=>p.weekKey===weekKey)||{}).weekLabel || weekKey;
-  PEDIDOS.push({
-    id: tempId, nombre, tel, zona, notas,
+  
+  const erPedido = {
+    id: erUniqueId, nombre, tel, zona, notas,
     seg: 'domicilio', ruta: dia, fmt,
     estado: 'activo', freq: 'semanal',
     pago: 'pendiente', weekKey, weekLabel,
-    entregado: true, esEntregaRapida: true
-  });
+    entregado: true, esEntregaRapida: true,
+    vrKey: erKey, autoKey: erKey,
+    fechaEntrega: new Date().toISOString().split('T')[0]
+  };
+  PEDIDOS.push(erPedido);
   
-  // Deduct from inventory
+  // Deduct from inventory immediately
   const gsp = t30 === 'gsp' ? q30 : 0;
   const gcp = t30 === 'gcp' ? q30 : 0;
   const pcp = q15;
   INVENTARIO.push({
     id: NIID++, fecha: new Date().toISOString().split('T')[0],
-    tipo: 'entrega', desc: 'Entrega rápida: ' + nombre, notas: '',
+    tipo: 'entrega', desc: 'Entrega extra: ' + nombre, notas: 'Entrega rápida',
     gsp: -gsp, gcp: -gcp, pcp: -pcp,
     total: -(gsp + gcp + pcp * 0.5),
-    autoKey: 'rapida_' + tempId
+    autoKey: 'inv_' + erKey
   });
   saveInventario_data();
   
@@ -3212,23 +3222,19 @@ function guardarEntregaRapida() {
     saveState();
   }
   
-  // Finanzas entry will be created automatically when marked as cobrado (togglePago)
-  // No auto-register here — keeps accounting clean
-
+  // Finanzas registra cuando se marca cobrado en togglePago — no aquí
   savePedidos();
-  // Push entrega rapida pedido to Sheets
-  const erPedido = PEDIDOS.find(p => p.autoKey === 'rapida_' + tempId || (p.esEntregaRapida && p.nombre === nombre && p.weekKey === weekKey));
-  if (erPedido) pushPedidoSheets(erPedido);
+  pushPedidoSheets(erPedido);
   guardarTodo();
   closeModal('modal-entrega-rapida');
   renderRuta();
+  renderCobros();
   const rutaScreen = document.getElementById('s-ruta');
   if (rutaScreen && !rutaScreen.classList.contains('active')) {
     const rutaNav = document.querySelector('.nav-item[onclick*="ruta"]');
     goTo('ruta', rutaNav);
   }
 }
-
 // ═══════════════════════════════════════════════
 // FIX: renderRuta uses LIVE CLIENTES data (no stale cache)
 // When pedido is rendered, pull fresh name/tel/notas from CLIENTES
@@ -4402,84 +4408,6 @@ function selectEntregaCliente(id) {
   document.getElementById('er-cli-search').value = c.nombre;
 }
 
-function guardarEntregaRapida() {
-  const nombre = document.getElementById('er-nombre').value.trim();
-  if (!nombre) { alert('El nombre es obligatorio.'); return; }
-  
-  const dia = document.getElementById('er-dia').value;
-  const weekKey = document.getElementById('er-weekkey').value;
-  const tel = document.getElementById('er-tel').value.trim();
-  const zona = document.getElementById('er-zona').value.trim();
-  const notas = document.getElementById('er-notas').value.trim();
-  const q30 = parseInt(document.getElementById('er-q30').value)||0;
-  const q15 = parseInt(document.getElementById('er-q15').value)||0;
-  const p30 = parseInt(document.getElementById('er-p30').value)||5000;
-  const p15 = parseInt(document.getElementById('er-p15').value)||3000;
-  const t30 = document.getElementById('er-t30').value;
-  const addCRM = document.getElementById('er-add-crm').checked;
-  
-  if (!q30 && !q15) { alert('Indicá al menos una cantidad.'); return; }
-  
-  const fmt = [];
-  if (q30 > 0) fmt.push({u:30, q:q30, p:p30});
-  if (q15 > 0) fmt.push({u:15, q:q15, p:p15});
-  
-  // Add to PEDIDOS for this week
-  const tempId = Date.now();
-  const weekLabel = (PEDIDOS.find(p=>p.weekKey===weekKey)||{}).weekLabel || weekKey;
-  PEDIDOS.push({
-    id: tempId, nombre, tel, zona, notas,
-    seg: 'domicilio', ruta: dia, fmt,
-    estado: 'activo', freq: 'semanal',
-    pago: 'pendiente', weekKey, weekLabel,
-    entregado: true, esEntregaRapida: true
-  });
-  
-  // Deduct from inventory
-  const gsp = t30 === 'gsp' ? q30 : 0;
-  const gcp = t30 === 'gcp' ? q30 : 0;
-  const pcp = q15;
-  INVENTARIO.push({
-    id: NIID++, fecha: new Date().toISOString().split('T')[0],
-    tipo: 'entrega', desc: 'Entrega rápida: ' + nombre, notas: '',
-    gsp: -gsp, gcp: -gcp, pcp: -pcp,
-    total: -(gsp + gcp + pcp * 0.5),
-    autoKey: 'rapida_' + tempId
-  });
-  saveInventario_data();
-  
-  // Add to CRM if checked
-  if (addCRM) {
-    CLIENTES.push({ id: NID++, nombre, tel, zona, notas, seg: 'domicilio', ruta: dia, fmt, estado: 'activo', freq: 'semanal' });
-    saveState();
-  }
-  
-  // Auto-register in Finanzas as venta
-  const montoEntrega = fmt.reduce((a,f)=>a+(f.q*f.p),0);
-  if (montoEntrega > 0) {
-    MOVIMIENTOS.push({
-      id: NMID++,
-      fecha: new Date().toISOString().split('T')[0],
-      tipo: 'venta',
-      desc: 'Entrega rápida: ' + nombre,
-      monto: montoEntrega,
-      pago: 'pendiente',
-      notas: (q30>0?q30+'×30u ':'')+(q15>0?q15+'×15u':''),
-      autoKey: 'er_'+tempId
-    });
-    saveMovimientos();
-  }
-
-  savePedidos();
-  guardarTodo();
-  closeModal('modal-entrega-rapida');
-  renderRuta();
-  const rutaScreen = document.getElementById('s-ruta');
-  if (rutaScreen && !rutaScreen.classList.contains('active')) {
-    const rutaNav = document.querySelector('.nav-item[onclick*="ruta"]');
-    goTo('ruta', rutaNav);
-  }
-}
 
 // ═══════════════════════════════════════════════
 // FIX: renderRuta uses LIVE CLIENTES data (no stale cache)
