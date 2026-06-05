@@ -1355,7 +1355,7 @@ async function syncPedidosFromSheets(weekKey) {
         entregado: p.entregado || false,
         notaCobro: p.nota_cobro || '',
         agregadoManual: p.agregado_manual || false,
-        esEntregaRapida: p.es_entrega_rapida || false,
+        esEntregaRapida: p.es_entrega_flash || false,
         autoKey: p.auto_key || ''
       }));
       PEDIDOS = PEDIDOS.filter(p => p.weekKey !== weekKey);
@@ -1385,7 +1385,7 @@ function pedidoToRow(pedido) {
     entregado: pedido.entregado || false,
     nota_cobro: pedido.notaCobro || '',
     agregado_manual: pedido.agregadoManual || false,
-    es_entrega_rapida: pedido.esEntregaRapida || false,
+    es_entrega_flash: pedido.esEntregaRapida || false,
     auto_key: pedido.autoKey || ''
   };
 }
@@ -3128,6 +3128,8 @@ function openEntregaRapida(dia, weekKey) {
   document.getElementById('er-p15').value = 3000;
   document.getElementById('er-t30').value = 'gcp';
   document.getElementById('er-add-crm').checked = true;
+  const erFechaEl = document.getElementById('er-fecha');
+  if (erFechaEl) { const n=new Date(); erFechaEl.value=n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0'); }
   // Populate client search dropdown
   renderEntregaClienteSearch('');
   openModal('modal-entrega-rapida');
@@ -3199,7 +3201,7 @@ function guardarEntregaRapida() {
     pago: 'pendiente', weekKey, weekLabel,
     entregado: true, esEntregaRapida: true,
     vrKey: erKey, autoKey: erKey,
-    fechaEntrega: new Date().toISOString().split('T')[0]
+    fechaEntrega: document.getElementById('er-fecha')?.value || new Date().toISOString().split('T')[0]
   };
   PEDIDOS.push(erPedido);
   
@@ -3208,8 +3210,8 @@ function guardarEntregaRapida() {
   const gcp = t30 === 'gcp' ? q30 : 0;
   const pcp = q15;
   INVENTARIO.push({
-    id: NIID++, fecha: new Date().toISOString().split('T')[0],
-    tipo: 'entrega', desc: 'Entrega extra: ' + nombre, notas: 'Entrega rápida',
+    id: NIID++, fecha: document.getElementById('er-fecha')?.value || new Date().toISOString().split('T')[0],
+    tipo: 'entrega', desc: 'Entrega extra: ' + nombre, notas: 'Entrega flash',
     gsp: -gsp, gcp: -gcp, pcp: -pcp,
     total: -(gsp + gcp + pcp * 0.5),
     autoKey: 'inv_' + erKey
@@ -3359,8 +3361,8 @@ function renderConfirmaciones() {
   const searchQ = (document.getElementById('conf-search')?.value || '').toLowerCase();
   const estadoFilter = window._confEstadoFilter || 'todos';
   
-  // semPAll = ALL pedidos this week — for metrics (NEVER filtered)
-  const semPAll = PEDIDOS.filter(p => p.weekKey === wk.key);
+  // semPAll = regular pedidos this week only (exclude Venta Rápida — those are JP's extra sales)
+  const semPAll = PEDIDOS.filter(p => p.weekKey === wk.key && !p.esVentaRapida);
   
   // semP = filtered list for display only
   let semP = [...semPAll];
@@ -3868,7 +3870,9 @@ function renderRuta() {
   });
   
   // Also include quick deliveries from PEDIDOS
-  const quickDeliveries = PEDIDOS.filter(p => p.weekKey === wk.key && p.esEntregaRapida);
+  // Only Ronald's field deliveries (esEntregaRapida) show in Hoja de Ruta
+  // Venta Rápida (esVentaRapida) = JP's sales, only in Cobros/Finanzas
+  const quickDeliveries = PEDIDOS.filter(p => p.weekKey === wk.key && p.esEntregaRapida && !p.esVentaRapida);
   // And already-delivered pedidos
   const delivered = PEDIDOS.filter(p => p.weekKey === wk.key && p.entregado && !p.esEntregaRapida);
   
@@ -4062,7 +4066,7 @@ function renderRuta() {
           <button class="btn btn-sm" onclick="printRuta('${dia}','${wk.key}')">🖨 Imprimir</button>
           <button class="btn btn-sm btn-success" onclick="openMapsRuta('${dia}','${wk.key}')">🗺️ Maps</button>
           <button class="btn btn-sm" style="background:#33CCFF;color:#fff;border:none" onclick="openWazeNext('${dia}','${wk.key}')">🔵 Waze</button>
-          <button class="btn btn-sm btn-primary" onclick="openEntregaRapida('${dia}','${wk.key}')">➕ Entrega</button>
+          <button class="btn btn-sm btn-primary" onclick="openEntregaRapida('${dia}','${wk.key}')">⚡ Flash</button>
         </div>
       </div>
       <div class="parada" style="background:var(--bg2)">
@@ -4160,7 +4164,7 @@ function printRuta(dia, weekKey) {
     return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
   }).sort((a,b) => getZoneScore(a.zona, dia) - getZoneScore(b.zona, dia));
   
-  const quickDeliveries = PEDIDOS.filter(p => p.weekKey === wkKey && p.ruta === dia && p.esEntregaRapida);
+  const quickDeliveries = PEDIDOS.filter(p => p.weekKey === wkKey && p.ruta === dia && p.esEntregaRapida && !p.esVentaRapida);
   const allStops = [...confirmedClients, ...quickDeliveries];
   
   if (!allStops.length) { alert('No hay paradas confirmadas para este día.'); return; }
@@ -4372,6 +4376,8 @@ function openEntregaRapida(dia, weekKey) {
   document.getElementById('er-p15').value = 3000;
   document.getElementById('er-t30').value = 'gcp';
   document.getElementById('er-add-crm').checked = true;
+  const erFechaEl = document.getElementById('er-fecha');
+  if (erFechaEl) { const n=new Date(); erFechaEl.value=n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0'); }
   // Populate client search dropdown
   renderEntregaClienteSearch('');
   openModal('modal-entrega-rapida');
@@ -5149,7 +5155,7 @@ renderPedidos();
 <!-- MODAL ENTREGA RÁPIDA -->
 <div class="modal-overlay" id="modal-entrega-rapida">
   <div class="modal">
-    <h3>Agregar entrega en ruta</h3>
+    <h3>⚡ Entrega Flash</h3>
     <input type="hidden" id="er-dia">
     <input type="hidden" id="er-weekkey">
     <div class="form-row">
@@ -5184,6 +5190,10 @@ renderPedidos();
     <div class="form-row" style="margin-top:10px">
       <label>Notas / Dirección</label>
       <input type="text" id="er-notas" placeholder="Ej: Condo XYZ casa 5...">
+    </div>
+    <div class="form-row" style="margin-top:10px">
+      <label>Fecha de entrega</label>
+      <input type="date" id="er-fecha">
     </div>
     <div style="display:flex;align-items:center;gap:8px;margin-top:10px;padding:10px;background:var(--bg2);border-radius:var(--r)">
       <input type="checkbox" id="er-add-crm" checked style="width:16px;height:16px">
