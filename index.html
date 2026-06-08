@@ -1355,7 +1355,9 @@ async function syncPedidosFromSheets(weekKey) {
         entregado: p.entregado || false,
         notaCobro: p.nota_cobro || '',
         agregadoManual: p.agregado_manual || false,
-        esEntregaRapida: p.es_entrega_rapida || false,
+        esEntregaRapida: (p.es_entrega_rapida || false) && !(p.auto_key||'').startsWith('vr_'),
+        esVentaRapida: (p.auto_key||'').startsWith('vr_'),
+        vrKey: (p.auto_key||'').startsWith('vr_') ? p.auto_key : undefined,
         autoKey: p.auto_key || ''
       }));
       PEDIDOS = PEDIDOS.filter(p => p.weekKey !== weekKey);
@@ -1806,9 +1808,9 @@ function renderCobros() {
     const wkCob = getWeekDates(cobrosWeekOffset);
     semP = PEDIDOS.filter(p => {
       // For VR/ER pedidos: match by weekKey OR by fechaEntrega within the selected week range
-      if (p.esEntregaRapida || p.esVentaRapida) {
+      const isExtra = p.esEntregaRapida || p.esVentaRapida || (p.autoKey||'').startsWith('vr_') || (p.autoKey||'').startsWith('er_');
+      if (isExtra) {
         if (p.weekKey === wkCob.key) return true;
-        // Also check if fechaEntrega falls within this week
         if (p.fechaEntrega) {
           const fe = new Date(p.fechaEntrega + 'T12:00:00');
           return fe >= wkCob.start && fe <= wkCob.end;
