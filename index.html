@@ -1355,7 +1355,7 @@ async function syncPedidosFromSheets(weekKey) {
         entregado: p.entregado || false,
         notaCobro: p.nota_cobro || '',
         agregadoManual: p.agregado_manual || false,
-        esEntregaRapida: p.es_entrega_flash || false,
+        esEntregaRapida: p.es_entrega_rapida || false,
         autoKey: p.auto_key || ''
       }));
       PEDIDOS = PEDIDOS.filter(p => p.weekKey !== weekKey);
@@ -1385,7 +1385,7 @@ function pedidoToRow(pedido) {
     entregado: pedido.entregado || false,
     nota_cobro: pedido.notaCobro || '',
     agregado_manual: pedido.agregadoManual || false,
-    es_entrega_flash: pedido.esEntregaRapida || false,
+    es_entrega_rapida: pedido.esEntregaRapida || false,
     auto_key: pedido.autoKey || ''
   };
 }
@@ -1805,8 +1805,17 @@ function renderCobros() {
     // Selected week — only confirmed, changed, quick delivery, or venta rapida
     const wkCob = getWeekDates(cobrosWeekOffset);
     semP = PEDIDOS.filter(p => {
+      // For VR/ER pedidos: match by weekKey OR by fechaEntrega within the selected week range
+      if (p.esEntregaRapida || p.esVentaRapida) {
+        if (p.weekKey === wkCob.key) return true;
+        // Also check if fechaEntrega falls within this week
+        if (p.fechaEntrega) {
+          const fe = new Date(p.fechaEntrega + 'T12:00:00');
+          return fe >= wkCob.start && fe <= wkCob.end;
+        }
+        return false;
+      }
       if (p.weekKey !== wkCob.key) return false;
-      if (p.esEntregaRapida || p.esVentaRapida) return true;
       const conf = getConf(wkCob.key, p.id);
       return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
     });
