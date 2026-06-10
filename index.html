@@ -1837,9 +1837,10 @@ function renderCobros() {
 
   const pag = semP.filter(p=>p.pago==='pagado');
   const pen = semP.filter(p=>p.pago==='pendiente');
-  const tPag = pag.reduce((a,p)=>a+fmtMonto(p.fmt),0);
-  const tPen = pen.reduce((a,p)=>a+fmtMonto(p.fmt),0);
-  const tot = semP.reduce((a,p)=>a+fmtMonto(p.fmt),0);
+  const wkKey = cobFiltro === 'pendientes' ? null : getWeekDates(cobrosWeekOffset).key;
+  const tPag = pag.reduce((a,p)=>a+montoConf(p, wkKey||p.weekKey),0);
+  const tPen = pen.reduce((a,p)=>a+montoConf(p, wkKey||p.weekKey),0);
+  const tot = semP.reduce((a,p)=>a+montoConf(p, wkKey||p.weekKey),0);
 
   // Update buttons active state
   ['cobBtn-semana','cobBtn-pendientes'].forEach(id=>{
@@ -2941,56 +2942,48 @@ function renderInventario() {
     totalCart += (i.total||0);
   });
   
-  // Demand based on confirmed orders for current week
+  // Demanda pendiente = confirmados NO entregados aún esta semana
   const wkInv = getWeekDates(0);
-  let confGSP=0, confGCP=0, confPCP=0;
-  PEDIDOS.filter(p => p.weekKey === wkInv.key).forEach(p => {
+  let pendGSP=0, pendGCP=0, pendPCP=0;
+  PEDIDOS.filter(p => p.weekKey === wkInv.key && !p.entregado && !p.esVentaRapida).forEach(p => {
     const conf = getConf(wkInv.key, p.id);
     if (!conf || (conf.estado !== 'confirmado' && conf.estado !== 'cambio')) return;
     const fo = conf.fmtOverride || {};
     const hasNew = fo['fmt_gsp']!==undefined || fo['fmt_gcp']!==undefined || fo['fmt_pcp']!==undefined;
     if (hasNew) {
-      confGSP += fo['fmt_gsp']||0; confGCP += fo['fmt_gcp']||0; confPCP += fo['fmt_pcp']||0;
+      pendGSP += fo['fmt_gsp']||0; pendGCP += fo['fmt_gcp']||0; pendPCP += fo['fmt_pcp']||0;
     } else {
       p.fmt.forEach(function(f) {
         const defTipo = f.u===15?'pcp':(p.seg==='b2b'?'gsp':'gcp');
         ['gsp','gcp','pcp'].forEach(function(k) {
           const fk = 'fmt'+f.u+'_'+k;
           const qty = fo[fk]!==undefined ? fo[fk] : (k===defTipo?f.q:0);
-          if (k==='gsp') confGSP+=qty; else if (k==='gcp') confGCP+=qty; else confPCP+=qty;
+          if (k==='gsp') pendGSP+=qty; else if (k==='gcp') pendGCP+=qty; else pendPCP+=qty;
         });
       });
     }
   });
-  const needed = confGSP + confGCP + confPCP * 0.5;
-  const neededLabel = confGSP + confGCP + confPCP > 0 
-    ? confGSP + ' G-SP · ' + confGCP + ' G-CP · ' + confPCP + ' P-CP'
-    : 'Sin confirmados aún';
+  const needed = pendGSP + pendGCP + pendPCP * 0.5;
+  const neededLabel = pendGSP + pendGCP + pendPCP > 0
+    ? pendGSP + ' G-SP · ' + pendGCP + ' G-CP · ' + pendPCP + ' P-CP'
+    : 'Todo entregado ✓';
   const deficit = Math.max(0, needed - totalCart);
   
   document.getElementById('inv-metrics').innerHTML = `
-    <div class="metric-card ${totalCart < needed*0.3 ? 'accent' : ''}">
+    <div class="metric-card ${totalCart < 0 ? 'accent' : ''}">
       <div class="label">Stock total</div>
       <div class="value">${formatCart(totalCart)}</div>
       <div class="sub">cartones en bodega</div>
     </div>
     <div class="metric-card">
-      <div class="label">Desglose</div>
-      <div class="value" style="font-size:14px;line-height:1.8">
-        <span style="color:#8B3A1E">${totalGSP} G-SP</span> · 
-        <span style="color:#1A4E8A">${totalGCP} G-CP</span> · 
-        <span style="color:#2D6A4F">${totalPCP} P-CP</span>
-      </div>
-    </div>
-    <div class="metric-card">
-      <div class="label">Demanda confirmada</div>
+      <div class="label">Por entregar — semana actual</div>
       <div class="value">${formatCart(needed)}</div>
       <div class="sub" style="font-size:11px">${neededLabel}</div>
     </div>
     <div class="metric-card ${deficit>0?'accent':''}">
       <div class="label">${deficit>0?'⚠ Faltante':'✓ Suficiente'}</div>
       <div class="value">${formatCart(deficit>0?deficit:totalCart-needed)}</div>
-      <div class="sub">cartones</div>
+      <div class="sub">${deficit>0?'cartones a conseguir':'cartones de excedente'}</div>
     </div>
   `;
   
