@@ -1809,7 +1809,7 @@ function renderCobros() {
       // Only show delivered pedidos in cobros pendientes
       if (!p.entregado) return false;
       const conf = getConf(p.weekKey, p.id);
-      return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
+      return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio') && conf.estado !== 'no_responde';
     });
   } else {
     // Selected week — only confirmed, changed, quick delivery, or venta rapida
@@ -1829,7 +1829,7 @@ function renderCobros() {
       // Only show in Cobros if actually delivered
       if (!p.entregado) return false;
       const conf = getConf(wkCob.key, p.id);
-      return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
+      return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio') && conf.estado !== 'no_responde';
     });
   }
   // Apply search filter
@@ -1950,29 +1950,54 @@ function renderCobros() {
 }
 
 function editMontoCobro(clienteId, weekKey, vrKey) {
-  const p = vrKey
+  const p = vrKey && vrKey !== ''
     ? PEDIDOS.find(x => x.vrKey === vrKey || x.autoKey === vrKey)
     : PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
   if (!p) return;
   const montoActual = montoConf(p, weekKey);
-  const nuevo = prompt('Monto a cobrar a ' + p.nombre + ' (¢):', montoActual);
-  if (nuevo === null) return;
-  const montoNuevo = parseInt(nuevo.replace(/[^0-9]/g,''));
-  if (isNaN(montoNuevo)) return;
-  // For VR/ER pedidos save on pedido directly; for regular pedidos save in confirmacion
-  if (p.esVentaRapida || p.esEntregaRapida || (p.autoKey||'').startsWith('vr_') || (p.autoKey||'').startsWith('er_')) {
-    p.fmt = [{u:30, q:1, p:montoNuevo}]; // update fmt with new price
-    p.montoOverride = montoNuevo;
-    savePedidos();
-    pushPedidoSheets(p);
-  } else {
-    const ck = getConfKey(weekKey, clienteId);
-    const ex = CONFIRMACIONES[ck] || {};
-    CONFIRMACIONES[ck] = Object.assign({}, ex, {montoOverride: montoNuevo});
-    saveConfirmaciones();
-    pushConfirmacionesSheets();
-  }
-  renderCobros();
+  
+  // Use inline modal instead of prompt (prompt blocked on mobile)
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `
+    <div style="background:var(--bg);border-radius:16px;padding:24px;width:100%;max-width:340px;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
+      <div style="font-size:16px;font-weight:600;margin-bottom:4px">Editar monto</div>
+      <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${p.nombre}</div>
+      <input id="edit-monto-input" type="number" value="${montoActual}" 
+        style="width:100%;padding:12px;border:2px solid var(--primary);border-radius:8px;font-size:18px;font-family:inherit;box-sizing:border-box;margin-bottom:16px">
+      <div style="display:flex;gap:8px">
+        <button onclick="this.closest('div[style*=fixed]').remove()" 
+          style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit">Cancelar</button>
+        <button id="edit-monto-save"
+          style="flex:1;padding:12px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-weight:600;font-family:inherit">Guardar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  
+  const input = overlay.querySelector('#edit-monto-input');
+  input.focus(); input.select();
+  
+  const save = () => {
+    const montoNuevo = parseInt(String(input.value).replace(/[^0-9]/g,''));
+    if (isNaN(montoNuevo) || montoNuevo <= 0) return;
+    overlay.remove();
+    if (p.esVentaRapida || p.esEntregaRapida || (p.autoKey||'').startsWith('vr_') || (p.autoKey||'').startsWith('er_')) {
+      p.montoOverride = montoNuevo;
+      savePedidos();
+      pushPedidoSheets(p);
+    } else {
+      const ck = getConfKey(weekKey, clienteId);
+      const ex = CONFIRMACIONES[ck] || {};
+      CONFIRMACIONES[ck] = Object.assign({}, ex, {montoOverride: montoNuevo});
+      saveConfirmaciones();
+      pushConfirmacionesSheets();
+    }
+    renderCobros();
+  };
+  
+  overlay.querySelector('#edit-monto-save').onclick = save;
+  input.onkeydown = e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') overlay.remove(); };
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
 }
 
 function editNotaCobro(clienteId, weekKey) {
