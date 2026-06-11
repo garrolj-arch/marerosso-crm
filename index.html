@@ -1464,16 +1464,25 @@ function montoConf(p, weekKey) {
   const p15 = (fmt.find(f=>f.u===15)||{p:3000}).p;
   
   // Support both old (fmt30_gsp) and new (fmt_gsp) key formats
+  // When both exist, prefer old keys if new keys are all zero (migration artifact)
   const hasNew = fo['fmt_gsp'] !== undefined || fo['fmt_gcp'] !== undefined || fo['fmt_pcp'] !== undefined;
+  const oldGsp = fo['fmt30_gsp'] || 0;
+  const oldGcp = fo['fmt30_gcp'] || 0;
+  const oldPcp = (fo['fmt30_pcp'] || 0) + (fo['fmt15_pcp'] || 0);
+  const hasOldValues = oldGsp + oldGcp + oldPcp > 0;
   let gsp, gcp, pcp;
   if (hasNew) {
-    gsp = fo['fmt_gsp'] || 0;
-    gcp = fo['fmt_gcp'] || 0;
-    pcp = fo['fmt_pcp'] || 0;
+    const nGsp = fo['fmt_gsp'] || 0;
+    const nGcp = fo['fmt_gcp'] || 0;
+    const nPcp = fo['fmt_pcp'] || 0;
+    // If new keys are all 0 but old keys have values, use old
+    if (nGsp + nGcp + nPcp === 0 && hasOldValues) {
+      gsp = oldGsp; gcp = oldGcp; pcp = oldPcp;
+    } else {
+      gsp = nGsp; gcp = nGcp; pcp = nPcp;
+    }
   } else {
-    gsp = fo['fmt30_gsp'] || 0;
-    gcp = fo['fmt30_gcp'] || 0;
-    pcp = (fo['fmt30_pcp'] || 0) + (fo['fmt15_pcp'] || 0);
+    gsp = oldGsp; gcp = oldGcp; pcp = oldPcp;
   }
   const total = gsp*p30 + gcp*p30 + pcp*p15;
   return total > 0 ? total : fmtMonto(fmt);
@@ -1489,9 +1498,16 @@ function fmtStrConf(p, weekKey) {
   const fo = conf && conf.fmtOverride ? conf.fmtOverride : null;
   if (!fo) return fmtStr(p.fmt);
   const parts = [];
-  const gsp = fo['fmt_gsp'] !== undefined ? fo['fmt_gsp'] : (fo['fmt30_gsp']||0);
-  const gcp = fo['fmt_gcp'] !== undefined ? fo['fmt_gcp'] : (fo['fmt30_gcp']||0);
-  const pcp = fo['fmt_pcp'] !== undefined ? fo['fmt_pcp'] : ((fo['fmt30_pcp']||0)+(fo['fmt15_pcp']||0));
+  const oGsp = fo['fmt30_gsp']||0;
+  const oGcp = fo['fmt30_gcp']||0;
+  const oPcp = (fo['fmt30_pcp']||0)+(fo['fmt15_pcp']||0);
+  const nGsp = fo['fmt_gsp'] !== undefined ? fo['fmt_gsp'] : oGsp;
+  const nGcp = fo['fmt_gcp'] !== undefined ? fo['fmt_gcp'] : oGcp;
+  const nPcp = fo['fmt_pcp'] !== undefined ? fo['fmt_pcp'] : oPcp;
+  // If new keys are all 0 but old keys have values, use old
+  const gsp = (nGsp+nGcp+nPcp===0 && oGsp+oGcp+oPcp>0) ? oGsp : nGsp;
+  const gcp = (nGsp+nGcp+nPcp===0 && oGsp+oGcp+oPcp>0) ? oGcp : nGcp;
+  const pcp = (nGsp+nGcp+nPcp===0 && oGsp+oGcp+oPcp>0) ? oPcp : nPcp;
   if (gsp > 0) parts.push(gsp+'×G-SP');
   if (gcp > 0) parts.push(gcp+'×G-CP');
   if (pcp > 0) parts.push(pcp+'×P-CP');
@@ -1958,15 +1974,16 @@ function editMontoCobro(clienteId, weekKey, vrKey) {
   
   // Use inline modal instead of prompt (prompt blocked on mobile)
   const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.id = 'edit-monto-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0';
   overlay.innerHTML = `
-    <div style="background:var(--bg);border-radius:16px;padding:24px;width:calc(100% - 40px);max-width:340px;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
+    <div style="background:var(--bg);border-radius:16px 16px 0 0;padding:24px 24px 40px;width:100%;max-width:500px;box-shadow:0 -4px 32px rgba(0,0,0,0.2)">
       <div style="font-size:16px;font-weight:600;margin-bottom:4px">Editar monto</div>
       <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${p.nombre}</div>
       <input id="edit-monto-input" type="number" inputmode="numeric" value="${montoActual}" 
         style="width:100%;padding:12px;border:2px solid var(--primary);border-radius:8px;font-size:18px;font-family:inherit;box-sizing:border-box;margin-bottom:16px">
       <div style="display:flex;gap:8px">
-        <button onclick="document.body.querySelector('div[style*=z-index:9999]').remove()" 
+        <button onclick="document.getElementById('edit-monto-overlay').remove()" 
           style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit;font-size:15px">Cancelar</button>
         <button id="edit-monto-save"
           style="flex:1;padding:12px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-weight:600;font-family:inherit;font-size:15px">Guardar</button>
@@ -1997,7 +2014,7 @@ function editMontoCobro(clienteId, weekKey, vrKey) {
   
   overlay.querySelector('#edit-monto-save').onclick = save;
   input.onkeydown = e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') overlay.remove(); };
-  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  overlay.onclick = e => { if (e.target === overlay) { document.getElementById('edit-monto-overlay')?.remove(); } };
 }
 
 function editNotaCobro(clienteId, weekKey) {
