@@ -1690,7 +1690,7 @@ function editCobroDetalles(clienteId, weekKey, vrKey) {
         <button onclick="document.getElementById('cobro-detalle-overlay').remove()"
           style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit;font-size:15px">Cancelar</button>
         <button id="det-save-btn"
-          style="flex:2;padding:14px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-weight:700;font-family:inherit;font-size:16px;letter-spacing:.3px">💾 Guardar detalles</button>
+          style="flex:2;padding:14px;border:none;border-radius:8px;background:#F5E6C8;color:#1C1510;cursor:pointer;font-weight:700;font-family:inherit;font-size:16px">Guardar</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -2020,34 +2020,42 @@ function renderCobros() {
   if(cobFiltro==='pendientes') {
     const byWeek = {};
     sorted.forEach(p=>{ (byWeek[p.weekKey]||(byWeek[p.weekKey]=[])).push(p); });
-    el.innerHTML = Object.entries(byWeek).sort((a,b)=>a[0].localeCompare(b[0])).map(([wkey, pedidos])=>{
+    const weeksHtml = [];
+    Object.entries(byWeek).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([wkey, pedidos])=>{
       const weekTotal = pedidos.reduce((a,p)=>a+montoConf(p,wkey),0);
       const wLabel = pedidos[0].weekLabel || wkey;
-      return `
-        <div style="margin-bottom:20px">
-          <div style="font-size:12px;font-weight:600;color:var(--text2);padding:8px 0;border-bottom:2px solid var(--border2);margin-bottom:8px;display:flex;justify-content:space-between">
-            <span>📅 Semana ${wLabel}</span>
-            <span style="color:#92400E">${moneyFmt(weekTotal)} pendiente · ${pedidos.length} clientes</span>
-          </div>
-          ${pedidos.map(p=>`
-            <div class="cobro-summary">
-              <div class="cobro-nombre">${p.nombre}${p.esVentaRapida||p.esEntregaRapida?' <span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:10px;font-weight:600">extra</span>':''}</div>
-              <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmt}${p.numFactura?' · <span style="font-family:monospace;font-size:11px">'+p.numFactura+'</span>':''}</div>
-              ${p.dueDate && p.pago!=='pagado' ? dueDateBadge(p) : ''}
+      const rowsHtml = pedidos.map(p=>{
+        const vrk = p.vrKey || p.autoKey || '';
+        const fmt = fmtStrConf(p, wkey);
+        const monto = montoConf(p, wkey);
+        const waLink = p.tel ? `<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none;margin-right:4px">📱 WA</a>` : '';
+        const extraBadge = (p.esVentaRapida||p.esEntregaRapida) ? ' <span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:10px;font-weight:600">extra</span>' : '';
+        const factBadge = p.numFactura ? ` · <span style="font-family:monospace;font-size:11px">${p.numFactura}</span>` : '';
+        const dueBadge = (p.dueDate && p.pago!=='pagado') ? dueDateBadge(p) : '';
+        return `<div class="cobro-summary">
+              <div class="cobro-nombre">${p.nombre}${extraBadge}</div>
+              <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmt}${factBadge}</div>
+              ${dueBadge}
               <div style="display:flex;align-items:center;gap:4px">
                 <span class="cobro-monto">${moneyFmt(monto)}</span>
                 <button onclick="editMontoCobro(${p.id},'${wkey}','${vrk}')" title="Editar monto" style="background:none;border:none;cursor:pointer;font-size:15px;padding:2px 4px">✏️</button>
                 <button onclick="editCobroDetalles(${p.id},'${wkey}','${vrk}')" title="Factura / días crédito" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px 4px">🧾</button>
               </div>
               <div style="min-width:130px;text-align:right">
-                ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none;margin-right:4px">📱 WA</a>`:''}
-                <button class="pay-btn pendiente btn-sm" onclick="togglePago(${p.id},'${wkey}','${p.vrKey||''}');renderCobros()">
-                  Marcar cobrado
-                </button>
+                ${waLink}
+                <button class="pay-btn pendiente btn-sm" onclick="togglePago(${p.id},'${wkey}','${vrk}');renderCobros()">Marcar cobrado</button>
               </div>
-            </div>`).join('')}
-        </div>`;
-    }).join('');
+            </div>`;
+      }).join('');
+      weeksHtml.push(`<div style="margin-bottom:20px">
+          <div style="font-size:12px;font-weight:600;color:var(--text2);padding:8px 0;border-bottom:2px solid var(--border2);margin-bottom:8px;display:flex;justify-content:space-between">
+            <span>📅 Semana ${wLabel}</span>
+            <span style="color:#92400E">${moneyFmt(weekTotal)} pendiente · ${pedidos.length} clientes</span>
+          </div>
+          ${rowsHtml}
+        </div>`);
+    });
+    el.innerHTML = weeksHtml.join('');
   } else {
     el.innerHTML = sorted.map(p=>{
       const notaCobro = p.notaCobro || '';
