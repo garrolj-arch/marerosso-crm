@@ -810,6 +810,9 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
       <div class="form-row"><label>Tipo</label>
         <select id="f-cli-seg"><option value="domicilio">Domicilio</option><option value="b2b">B2B / Restaurante</option></select>
       </div>
+      <div class="form-row"><label>Días de crédito</label>
+        <input type="number" id="f-cli-dias-credito" value="0" min="0" max="90" style="width:80px" placeholder="0 = contado">
+      </div>
       <div class="form-row"><label>Ruta</label>
         <select id="f-cli-ruta">
           <option value="lunes">Lunes — Santa Ana / Escazú</option>
@@ -1450,8 +1453,6 @@ function fmtMonto(fmt) { return fmt.reduce((a,f)=>a+f.q*f.p, 0); }
 
 // Monto usando montoOverride > fmtOverride > default
 function montoConf(p, weekKey) {
-  // VR/ER pedidos store montoOverride directly on pedido
-  if (p.montoOverride !== undefined) return p.montoOverride;
   const conf = getConf(weekKey, p.id);
   if (conf && conf.montoOverride !== undefined) return conf.montoOverride;
   const fo = conf && conf.fmtOverride ? conf.fmtOverride : null;
@@ -1464,25 +1465,16 @@ function montoConf(p, weekKey) {
   const p15 = (fmt.find(f=>f.u===15)||{p:3000}).p;
   
   // Support both old (fmt30_gsp) and new (fmt_gsp) key formats
-  // When both exist, prefer old keys if new keys are all zero (migration artifact)
   const hasNew = fo['fmt_gsp'] !== undefined || fo['fmt_gcp'] !== undefined || fo['fmt_pcp'] !== undefined;
-  const oldGsp = fo['fmt30_gsp'] || 0;
-  const oldGcp = fo['fmt30_gcp'] || 0;
-  const oldPcp = (fo['fmt30_pcp'] || 0) + (fo['fmt15_pcp'] || 0);
-  const hasOldValues = oldGsp + oldGcp + oldPcp > 0;
   let gsp, gcp, pcp;
   if (hasNew) {
-    const nGsp = fo['fmt_gsp'] || 0;
-    const nGcp = fo['fmt_gcp'] || 0;
-    const nPcp = fo['fmt_pcp'] || 0;
-    // If new keys are all 0 but old keys have values, use old
-    if (nGsp + nGcp + nPcp === 0 && hasOldValues) {
-      gsp = oldGsp; gcp = oldGcp; pcp = oldPcp;
-    } else {
-      gsp = nGsp; gcp = nGcp; pcp = nPcp;
-    }
+    gsp = fo['fmt_gsp'] || 0;
+    gcp = fo['fmt_gcp'] || 0;
+    pcp = fo['fmt_pcp'] || 0;
   } else {
-    gsp = oldGsp; gcp = oldGcp; pcp = oldPcp;
+    gsp = fo['fmt30_gsp'] || 0;
+    gcp = fo['fmt30_gcp'] || 0;
+    pcp = (fo['fmt30_pcp'] || 0) + (fo['fmt15_pcp'] || 0);
   }
   const total = gsp*p30 + gcp*p30 + pcp*p15;
   return total > 0 ? total : fmtMonto(fmt);
@@ -1490,24 +1482,13 @@ function montoConf(p, weekKey) {
 
 // Formato string usando cantidades confirmadas
 function fmtStrConf(p, weekKey) {
-  // VR/ER pedidos have unique IDs — use their fmt directly
-  if (p.esVentaRapida || p.esEntregaRapida || (p.autoKey||'').startsWith('vr_') || (p.autoKey||'').startsWith('er_')) {
-    return fmtStr(p.fmt);
-  }
   const conf = getConf(weekKey, p.id);
   const fo = conf && conf.fmtOverride ? conf.fmtOverride : null;
   if (!fo) return fmtStr(p.fmt);
   const parts = [];
-  const oGsp = fo['fmt30_gsp']||0;
-  const oGcp = fo['fmt30_gcp']||0;
-  const oPcp = (fo['fmt30_pcp']||0)+(fo['fmt15_pcp']||0);
-  const nGsp = fo['fmt_gsp'] !== undefined ? fo['fmt_gsp'] : oGsp;
-  const nGcp = fo['fmt_gcp'] !== undefined ? fo['fmt_gcp'] : oGcp;
-  const nPcp = fo['fmt_pcp'] !== undefined ? fo['fmt_pcp'] : oPcp;
-  // If new keys are all 0 but old keys have values, use old
-  const gsp = (nGsp+nGcp+nPcp===0 && oGsp+oGcp+oPcp>0) ? oGsp : nGsp;
-  const gcp = (nGsp+nGcp+nPcp===0 && oGsp+oGcp+oPcp>0) ? oGcp : nGcp;
-  const pcp = (nGsp+nGcp+nPcp===0 && oGsp+oGcp+oPcp>0) ? oPcp : nPcp;
+  const gsp = fo['fmt_gsp'] !== undefined ? fo['fmt_gsp'] : (fo['fmt30_gsp']||0);
+  const gcp = fo['fmt_gcp'] !== undefined ? fo['fmt_gcp'] : (fo['fmt30_gcp']||0);
+  const pcp = fo['fmt_pcp'] !== undefined ? fo['fmt_pcp'] : ((fo['fmt30_pcp']||0)+(fo['fmt15_pcp']||0));
   if (gsp > 0) parts.push(gsp+'×G-SP');
   if (gcp > 0) parts.push(gcp+'×G-CP');
   if (pcp > 0) parts.push(pcp+'×P-CP');
@@ -1643,53 +1624,168 @@ function genWeek() {
   renderPedidos();
 }
 
-function togglePago(clienteId, weekKey, vrKey) {
-  // Find pedido — use vrKey for rapidas (unique), otherwise by clienteId+weekKey
+// Opens factura/credito editor modal — call from ✏️ button in cobros
+function editCobroDetalles(clienteId, weekKey, vrKey) {
   let p;
-  if (vrKey) {
-    p = PEDIDOS.find(x => x.vrKey === vrKey || x.autoKey === vrKey);
-  }
-  if (!p) {
-    p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
-  }
+  if (vrKey && vrKey !== '') p = PEDIDOS.find(x => x.vrKey === vrKey || x.autoKey === vrKey);
+  if (!p) p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
   if (!p) return;
+
+  const cliente = CLIENTES.find(c => c.id === (p.clienteId || p.id)) || {};
+  const diasDefault = p.diasCredito || cliente.diasCredito || 0;
+  const monto = montoConf(p, weekKey);
+  const pad = n => String(n).padStart(2,'0');
+
+  // Calculate current due date
+  const base = p.fechaEntrega || p.fechaCobro || new Date().toISOString().split('T')[0];
+  const baseDate = new Date(base + 'T12:00:00');
+  const currentDue = p.dueDate || (() => { const d = new Date(baseDate); d.setDate(d.getDate()+diasDefault); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); })();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'cobro-detalle-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:var(--bg);border-radius:16px 16px 0 0;padding:24px 24px 40px;width:100%;max-width:500px;box-shadow:0 -4px 32px rgba(0,0,0,0.2)">
+      <div style="font-size:16px;font-weight:600;margin-bottom:2px">Detalles de cobro</div>
+      <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${p.nombre} · ${moneyFmt(monto)}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--text3);display:block;margin-bottom:4px">DÍAS DE CRÉDITO</label>
+          <input type="number" id="det-dias" value="${diasDefault}" min="0" max="90"
+            style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg);box-sizing:border-box">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--text3);display:block;margin-bottom:4px">FECHA BASE ENTREGA</label>
+          <input type="date" id="det-fecha-base" value="${base}"
+            style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg);box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-bottom:12px">
+        <label style="font-size:11px;font-weight:600;color:var(--text3);display:block;margin-bottom:4px">N° FACTURA ELECTRÓNICA <span style="font-weight:400;opacity:.6">(opcional)</span></label>
+        <input type="text" id="det-factura" value="${p.numFactura||''}" placeholder="Ej: FE-001-2026-00123456"
+          style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div id="det-due-preview" style="font-size:12px;color:var(--text3);margin-bottom:16px;padding:8px 12px;background:var(--bg2);border-radius:8px">
+        📅 Vence: <strong>${diasDefault > 0 ? currentDue : 'Contado'}</strong>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="document.getElementById('cobro-detalle-overlay').remove()"
+          style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit;font-size:15px">Cancelar</button>
+        <button id="det-save-btn"
+          style="flex:2;padding:12px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-weight:600;font-family:inherit;font-size:15px">💾 Guardar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const updateDue = () => {
+    const dias = parseInt(overlay.querySelector('#det-dias').value)||0;
+    const fb = overlay.querySelector('#det-fecha-base').value;
+    const fbDate = new Date(fb + 'T12:00:00');
+    fbDate.setDate(fbDate.getDate()+dias);
+    const ds = fbDate.getFullYear()+'-'+pad(fbDate.getMonth()+1)+'-'+pad(fbDate.getDate());
+    overlay.querySelector('#det-due-preview').innerHTML = '📅 Vence: <strong>'+(dias>0?ds:'Contado')+'</strong>';
+    return dias > 0 ? ds : null;
+  };
+  overlay.querySelector('#det-dias').addEventListener('input', updateDue);
+  overlay.querySelector('#det-fecha-base').addEventListener('input', updateDue);
+
+  overlay.querySelector('#det-save-btn').onclick = () => {
+    const dias = parseInt(overlay.querySelector('#det-dias').value)||0;
+    const fb = overlay.querySelector('#det-fecha-base').value;
+    const factura = overlay.querySelector('#det-factura').value.trim();
+    const dueStr = updateDue();
+    overlay.remove();
+
+    p.diasCredito = dias;
+    p.dueDate = dueStr;
+    p.fechaEntrega = fb;
+    p.numFactura = factura;
+    savePedidos();
+    pushPedidoSheets(p);
+    renderCobros();
+  };
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+}
+
+function togglePago(clienteId, weekKey, vrKey) {
+  let p;
+  if (vrKey && vrKey !== '') p = PEDIDOS.find(x => x.vrKey === vrKey || x.autoKey === vrKey);
+  if (!p) p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
+  if (!p) return;
+
   const wasPaid = p.pago === 'pagado';
-  p.pago = wasPaid ? 'pendiente' : 'pagado';
+  const pagoKey = (p.vrKey||p.autoKey) && (p.esVentaRapida||p.esEntregaRapida)
+    ? 'pago_'+(p.vrKey||p.autoKey) : 'pago_'+weekKey+'_'+clienteId;
 
-  // Unique key for finanzas — always use vrKey/autoKey for rapidas
-  const pagoKey = (p.vrKey || p.autoKey) && (p.esVentaRapida || p.esEntregaRapida)
-    ? 'pago_' + (p.vrKey || p.autoKey)
-    : 'pago_' + weekKey + '_' + clienteId;
+  if (wasPaid) {
+    p.pago = 'pendiente';
+    const idx = MOVIMIENTOS.findIndex(m => m.autoKey === pagoKey);
+    if (idx !== -1) { MOVIMIENTOS.splice(idx, 1); saveMovimientos(); }
+    savePedidos(); pushPedidoSheets(p);
+    renderPedidos(); renderCobros(); renderFinanzas();
+    return;
+  }
 
-  if (!wasPaid) {
-    // Marcar cobrado → registrar en Finanzas
+  // Marcar cobrado — use saved factura/dias data, ask only for método de pago
+  const pad = n => String(n).padStart(2,'0');
+  const hoy = new Date();
+  const fechaHoy = hoy.getFullYear()+'-'+pad(hoy.getMonth()+1)+'-'+pad(hoy.getDate());
+  const monto = montoConf(p, weekKey);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'cobro-pago-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:var(--bg);border-radius:16px 16px 0 0;padding:24px 24px 40px;width:100%;max-width:500px;box-shadow:0 -4px 32px rgba(0,0,0,0.2)">
+      <div style="font-size:16px;font-weight:600;margin-bottom:2px">Confirmar cobro</div>
+      <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${p.nombre} · ${moneyFmt(monto)}${p.numFactura?' · '+p.numFactura:''}</div>
+      <div style="margin-bottom:16px">
+        <label style="font-size:11px;font-weight:600;color:var(--text3);display:block;margin-bottom:4px">MÉTODO DE PAGO</label>
+        <select id="cobro-metodo" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:15px;background:var(--bg)">
+          <option value="sinpe">SINPE</option>
+          <option value="transferencia">Transferencia</option>
+          <option value="efectivo">Efectivo</option>
+          <option value="tarjeta">Tarjeta</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="document.getElementById('cobro-pago-overlay').remove()"
+          style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit;font-size:15px">Cancelar</button>
+        <button id="cobro-pay-btn"
+          style="flex:2;padding:12px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-weight:600;font-family:inherit;font-size:15px">✅ Cobrado</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#cobro-pay-btn').onclick = () => {
+    const metodo = overlay.querySelector('#cobro-metodo').value;
+    overlay.remove();
+    p.pago = 'pagado';
+    p.fechaCobro = fechaHoy;
+
     const alreadyExists = MOVIMIENTOS.some(m => m.autoKey === pagoKey);
     if (!alreadyExists) {
-      // Use confirmed monto if available, otherwise fmt default
-      const monto = montoConf(p, weekKey);
       MOVIMIENTOS.push({
         id: NMID++,
-        fecha: new Date().toISOString().split('T')[0],
+        fecha: fechaHoy,
         tipo: 'venta',
-        desc: p.nombre + (p.esVentaRapida || p.esEntregaRapida ? ' (entrega extra)' : '') + ' — ' + (p.weekLabel || weekKey),
+        desc: p.nombre + (p.esVentaRapida||p.esEntregaRapida?' (extra)':'') + ' — ' + (p.weekLabel||weekKey),
         monto: monto,
-        pago: 'sinpe',
-        notas: 'Auto-registrado al marcar cobrado',
+        pago: metodo,
+        factura: !!(p.numFactura),
+        numFactura: p.numFactura || '',
+        dueDate: p.dueDate || null,
+        diasCredito: p.diasCredito || 0,
+        notas: p.diasCredito > 0 ? 'Crédito '+p.diasCredito+'d · vence '+p.dueDate : 'Contado',
         autoKey: pagoKey
       });
       saveMovimientos();
+      sbUpsert('kv_store', {key:'movimientos', value: JSON.stringify(MOVIMIENTOS)}).catch(()=>{});
     }
-  } else {
-    // Desmarcar cobrado → eliminar de Finanzas
-    const idx = MOVIMIENTOS.findIndex(m => m.autoKey === pagoKey);
-    if (idx !== -1) { MOVIMIENTOS.splice(idx, 1); saveMovimientos(); }
-  }
-
-  savePedidos();
-  if (p) pushPedidoSheets(p);
-  renderPedidos();
-  renderCobros();
-  renderFinanzas();
+    savePedidos(); pushPedidoSheets(p);
+    renderPedidos(); renderCobros(); renderFinanzas();
+  };
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
 }
 
 function renderPedidos() {
@@ -1804,6 +1900,17 @@ function cobrosWeekNav(dir) {
   renderCobros();
 }
 
+function dueDateBadge(p) {
+  if (!p.dueDate || p.pago === 'pagado') return '';
+  const today = new Date(); today.setHours(0,0,0,0);
+  const due = new Date(p.dueDate + 'T00:00:00');
+  const diff = Math.round((due - today) / 86400000);
+  if (diff < 0) return `<span style="font-size:11px;background:#FEE2E2;color:#991B1B;padding:2px 7px;border-radius:10px;font-weight:600;margin-left:4px">🔴 Vencida hace ${Math.abs(diff)}d</span>`;
+  if (diff === 0) return `<span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 7px;border-radius:10px;font-weight:600;margin-left:4px">🟡 Vence hoy</span>`;
+  if (diff <= 3) return `<span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 7px;border-radius:10px;font-weight:600;margin-left:4px">🟡 Vence en ${diff}d</span>`;
+  return `<span style="font-size:11px;background:#D1FAE5;color:#065F46;padding:2px 7px;border-radius:10px;font-weight:500;margin-left:4px">🟢 ${diff}d</span>`;
+}
+
 function renderCobros() {
   // Update nav label
   const wkNav = getWeekDates(cobrosWeekOffset);
@@ -1821,11 +1928,9 @@ function renderCobros() {
     // All pending across all weeks — confirmed or quick delivery
     semP = PEDIDOS.filter(p => {
       if (p.pago !== 'pendiente') return false;
-      if (p.esEntregaRapida || p.esVentaRapida || (p.autoKey||'').startsWith('vr_')) return true;
-      // Only show delivered pedidos in cobros pendientes
-      if (!p.entregado) return false;
+      if (p.esEntregaRapida) return true;
       const conf = getConf(p.weekKey, p.id);
-      return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio') && conf.estado !== 'no_responde';
+      return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
     });
   } else {
     // Selected week — only confirmed, changed, quick delivery, or venta rapida
@@ -1842,10 +1947,8 @@ function renderCobros() {
         return false;
       }
       if (p.weekKey !== wkCob.key) return false;
-      // Only show in Cobros if actually delivered
-      if (!p.entregado) return false;
       const conf = getConf(wkCob.key, p.id);
-      return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio') && conf.estado !== 'no_responde';
+      return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
     });
   }
   // Apply search filter
@@ -1853,10 +1956,9 @@ function renderCobros() {
 
   const pag = semP.filter(p=>p.pago==='pagado');
   const pen = semP.filter(p=>p.pago==='pendiente');
-  const wkKey = cobFiltro === 'pendientes' ? null : getWeekDates(cobrosWeekOffset).key;
-  const tPag = pag.reduce((a,p)=>a+montoConf(p, wkKey||p.weekKey),0);
-  const tPen = pen.reduce((a,p)=>a+montoConf(p, wkKey||p.weekKey),0);
-  const tot = semP.reduce((a,p)=>a+montoConf(p, wkKey||p.weekKey),0);
+  const tPag = pag.reduce((a,p)=>a+fmtMonto(p.fmt),0);
+  const tPen = pen.reduce((a,p)=>a+fmtMonto(p.fmt),0);
+  const tot = semP.reduce((a,p)=>a+fmtMonto(p.fmt),0);
 
   // Update buttons active state
   ['cobBtn-semana','cobBtn-pendientes'].forEach(id=>{
@@ -1932,9 +2034,13 @@ function renderCobros() {
           </div>
           ${pedidos.map(p=>`
             <div class="cobro-summary">
-              <div class="cobro-nombre">${p.nombre}${p.esVentaRapida||p.esEntregaRapida?' <span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:10px;font-weight:600">extra</span>':''}</div>
+              <div class="cobro-nombre">${p.nombre}${p.esVentaRapida||p.esEntregaRapida?' <span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:10px;font-weight:600">extra</span>':''}${dueDateBadge(p)}</div>
               <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStrConf(p,'${wkey}')}</div>
-              <div class="cobro-monto" style="cursor:pointer" onclick="editMontoCobro(${p.id},'${wkey}','${p.vrKey||p.autoKey||''}')" title="Toca para editar monto">${moneyFmt(montoConf(p,'${wkey}'))} ✏️</div>
+              <div style="display:flex;align-items:center;gap:6px">
+                <div class="cobro-monto">${moneyFmt(monto)}</div>
+                <button onclick="editMontoCobro(${p.id},'${wkey}','${vrk}')" title="Editar monto" style="background:none;border:none;cursor:pointer;font-size:14px;padding:2px">✏️</button>
+                <button onclick="editCobroDetalles(${p.id},'${wkey}','${vrk}')" title="Factura / días de crédito" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px">🧾</button>
+              </div>
               <div style="min-width:130px;text-align:right">
                 ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none;margin-right:4px">📱 WA</a>`:''}
                 <button class="pay-btn pendiente btn-sm" onclick="togglePago(${p.id},'${wkey}','${p.vrKey||''}');renderCobros()">
@@ -1951,7 +2057,11 @@ function renderCobros() {
       <div class="cobro-summary" style="flex-wrap:wrap;gap:6px">
         <div class="cobro-nombre">${p.nombre}${p.esVentaRapida||p.esEntregaRapida?' <span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:10px;font-weight:600">extra</span>':''}</div>
         <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStrConf(p,getWeekDates(cobrosWeekOffset).key)}</div>
-        <div class="cobro-monto" style="cursor:pointer" onclick="editMontoCobro(${p.id},'${getWeekDates(cobrosWeekOffset).key}','${p.vrKey||p.autoKey||''}')" title="Toca para editar monto">${moneyFmt(montoConf(p,getWeekDates(cobrosWeekOffset).key))} ✏️</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <div class="cobro-monto">${moneyFmt(montoConf(p,getWeekDates(cobrosWeekOffset).key))}</div>
+          <button onclick="editMontoCobro(${p.id},'${getWeekDates(cobrosWeekOffset).key}','${p.vrKey||p.autoKey||''}')" title="Editar monto" style="background:none;border:none;cursor:pointer;font-size:14px;padding:2px">✏️</button>
+          <button onclick="editCobroDetalles(${p.id},'${getWeekDates(cobrosWeekOffset).key}','${p.vrKey||p.autoKey||''}')" title="Factura / días de crédito" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px">🧾</button>
+        </div>
         ${notaCobro?`<div style="width:100%;font-size:11px;color:var(--text3);font-style:italic;padding:2px 0">📝 ${notaCobro}</div>`:''}
         <div style="min-width:130px;text-align:right;display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end">
           ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none">📱</a>`:''}
@@ -1965,56 +2075,20 @@ function renderCobros() {
   }
 }
 
-function editMontoCobro(clienteId, weekKey, vrKey) {
-  const p = vrKey && vrKey !== ''
-    ? PEDIDOS.find(x => x.vrKey === vrKey || x.autoKey === vrKey)
-    : PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
+function editMontoCobro(clienteId, weekKey) {
+  const p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey);
   if (!p) return;
   const montoActual = montoConf(p, weekKey);
-  
-  // Use inline modal instead of prompt (prompt blocked on mobile)
-  const overlay = document.createElement('div');
-  overlay.id = 'edit-monto-overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0';
-  overlay.innerHTML = `
-    <div style="background:var(--bg);border-radius:16px 16px 0 0;padding:24px 24px 40px;width:100%;max-width:500px;box-shadow:0 -4px 32px rgba(0,0,0,0.2)">
-      <div style="font-size:16px;font-weight:600;margin-bottom:4px">Editar monto</div>
-      <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${p.nombre}</div>
-      <input id="edit-monto-input" type="number" inputmode="numeric" value="${montoActual}" 
-        style="width:100%;padding:12px;border:2px solid var(--primary);border-radius:8px;font-size:18px;font-family:inherit;box-sizing:border-box;margin-bottom:16px">
-      <div style="display:flex;gap:8px">
-        <button onclick="document.getElementById('edit-monto-overlay').remove()" 
-          style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit;font-size:15px">Cancelar</button>
-        <button id="edit-monto-save"
-          style="flex:1;padding:12px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-weight:600;font-family:inherit;font-size:15px">Guardar</button>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-  
-  const input = overlay.querySelector('#edit-monto-input');
-  input.focus(); input.select();
-  
-  const save = () => {
-    const montoNuevo = parseInt(String(input.value).replace(/[^0-9]/g,''));
-    if (isNaN(montoNuevo) || montoNuevo <= 0) return;
-    overlay.remove();
-    if (p.esVentaRapida || p.esEntregaRapida || (p.autoKey||'').startsWith('vr_') || (p.autoKey||'').startsWith('er_')) {
-      p.montoOverride = montoNuevo;
-      savePedidos();
-      pushPedidoSheets(p);
-    } else {
-      const ck = getConfKey(weekKey, clienteId);
-      const ex = CONFIRMACIONES[ck] || {};
-      CONFIRMACIONES[ck] = Object.assign({}, ex, {montoOverride: montoNuevo});
-      saveConfirmaciones();
-      pushConfirmacionesSheets();
-    }
-    renderCobros();
-  };
-  
-  overlay.querySelector('#edit-monto-save').onclick = save;
-  input.onkeydown = e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') overlay.remove(); };
-  overlay.onclick = e => { if (e.target === overlay) { document.getElementById('edit-monto-overlay')?.remove(); } };
+  const nuevo = prompt('Monto a cobrar a ' + p.nombre + ' (¢):', montoActual);
+  if (nuevo === null) return;
+  const montoNuevo = parseInt(nuevo.replace(/[^0-9]/g,''));
+  if (isNaN(montoNuevo)) return;
+  // Save as montoOverride in confirmacion
+  const ck = getConfKey(weekKey, clienteId);
+  const ex = CONFIRMACIONES[ck] || {};
+  CONFIRMACIONES[ck] = Object.assign({}, ex, {montoOverride: montoNuevo});
+  saveConfirmaciones();
+  renderCobros();
 }
 
 function editNotaCobro(clienteId, weekKey) {
@@ -2278,6 +2352,7 @@ function openAddCliente() {
   document.getElementById('f-cli-id').value = '';
   ['f-cli-nombre','f-cli-tel','f-cli-zona','f-cli-notas','f-cli-lat','f-cli-lng','f-cli-loc-link'].forEach(id=>document.getElementById(id).value=''); document.getElementById('f-cli-loc-status').textContent='';
   document.getElementById('f-cli-seg').value = 'domicilio';
+  document.getElementById('f-cli-dias-credito').value = 0;
   document.getElementById('f-cli-ruta').value = 'lunes';
   document.getElementById('f-cli-freq').value = 'semanal';
   document.getElementById('f-cli-estado').value = 'activo';
@@ -2299,6 +2374,7 @@ function editCliente(id) {
   document.getElementById('f-cli-loc-link').value = '';
   document.getElementById('f-cli-loc-status').textContent = c.lat ? '✅ Ubicación guardada' : '';
   document.getElementById('f-cli-seg').value = c.seg;
+  document.getElementById('f-cli-dias-credito').value = c.diasCredito || 0;
   document.getElementById('f-cli-ruta').value = c.ruta;
   document.getElementById('f-cli-zona').value = c.zona||'';
   document.getElementById('f-cli-notas').value = c.notas||'';
@@ -2329,6 +2405,7 @@ function saveCliente() {
     lat: parseFloat(document.getElementById('f-cli-lat').value)||null,
     lng: parseFloat(document.getElementById('f-cli-lng').value)||null,
     seg: document.getElementById('f-cli-seg').value,
+    diasCredito: parseInt(document.getElementById('f-cli-dias-credito').value) || 0,
     ruta: document.getElementById('f-cli-ruta').value,
     zona: document.getElementById('f-cli-zona').value.trim(),
     notas: document.getElementById('f-cli-notas').value.trim(),
@@ -2984,48 +3061,56 @@ function renderInventario() {
     totalCart += (i.total||0);
   });
   
-  // Demanda pendiente = confirmados NO entregados aún esta semana
+  // Demand based on confirmed orders for current week
   const wkInv = getWeekDates(0);
-  let pendGSP=0, pendGCP=0, pendPCP=0;
-  PEDIDOS.filter(p => p.weekKey === wkInv.key && !p.entregado && !p.esVentaRapida).forEach(p => {
+  let confGSP=0, confGCP=0, confPCP=0;
+  PEDIDOS.filter(p => p.weekKey === wkInv.key).forEach(p => {
     const conf = getConf(wkInv.key, p.id);
     if (!conf || (conf.estado !== 'confirmado' && conf.estado !== 'cambio')) return;
     const fo = conf.fmtOverride || {};
     const hasNew = fo['fmt_gsp']!==undefined || fo['fmt_gcp']!==undefined || fo['fmt_pcp']!==undefined;
     if (hasNew) {
-      pendGSP += fo['fmt_gsp']||0; pendGCP += fo['fmt_gcp']||0; pendPCP += fo['fmt_pcp']||0;
+      confGSP += fo['fmt_gsp']||0; confGCP += fo['fmt_gcp']||0; confPCP += fo['fmt_pcp']||0;
     } else {
       p.fmt.forEach(function(f) {
         const defTipo = f.u===15?'pcp':(p.seg==='b2b'?'gsp':'gcp');
         ['gsp','gcp','pcp'].forEach(function(k) {
           const fk = 'fmt'+f.u+'_'+k;
           const qty = fo[fk]!==undefined ? fo[fk] : (k===defTipo?f.q:0);
-          if (k==='gsp') pendGSP+=qty; else if (k==='gcp') pendGCP+=qty; else pendPCP+=qty;
+          if (k==='gsp') confGSP+=qty; else if (k==='gcp') confGCP+=qty; else confPCP+=qty;
         });
       });
     }
   });
-  const needed = pendGSP + pendGCP + pendPCP * 0.5;
-  const neededLabel = pendGSP + pendGCP + pendPCP > 0
-    ? pendGSP + ' G-SP · ' + pendGCP + ' G-CP · ' + pendPCP + ' P-CP'
-    : 'Todo entregado ✓';
+  const needed = confGSP + confGCP + confPCP * 0.5;
+  const neededLabel = confGSP + confGCP + confPCP > 0 
+    ? confGSP + ' G-SP · ' + confGCP + ' G-CP · ' + confPCP + ' P-CP'
+    : 'Sin confirmados aún';
   const deficit = Math.max(0, needed - totalCart);
   
   document.getElementById('inv-metrics').innerHTML = `
-    <div class="metric-card ${totalCart < 0 ? 'accent' : ''}">
+    <div class="metric-card ${totalCart < needed*0.3 ? 'accent' : ''}">
       <div class="label">Stock total</div>
       <div class="value">${formatCart(totalCart)}</div>
       <div class="sub">cartones en bodega</div>
     </div>
     <div class="metric-card">
-      <div class="label">Por entregar — semana actual</div>
+      <div class="label">Desglose</div>
+      <div class="value" style="font-size:14px;line-height:1.8">
+        <span style="color:#8B3A1E">${totalGSP} G-SP</span> · 
+        <span style="color:#1A4E8A">${totalGCP} G-CP</span> · 
+        <span style="color:#2D6A4F">${totalPCP} P-CP</span>
+      </div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Demanda confirmada</div>
       <div class="value">${formatCart(needed)}</div>
       <div class="sub" style="font-size:11px">${neededLabel}</div>
     </div>
     <div class="metric-card ${deficit>0?'accent':''}">
       <div class="label">${deficit>0?'⚠ Faltante':'✓ Suficiente'}</div>
       <div class="value">${formatCart(deficit>0?deficit:totalCart-needed)}</div>
-      <div class="sub">${deficit>0?'cartones a conseguir':'cartones de excedente'}</div>
+      <div class="sub">cartones</div>
     </div>
   `;
   
