@@ -1695,21 +1695,26 @@ function editCobroDetalles(clienteId, weekKey, vrKey) {
     </div>`;
   document.body.appendChild(overlay);
   const upd = () => {
-    const d = parseInt(overlay.querySelector('#det-dias').value)||0;
-    const fb = overlay.querySelector('#det-fecha').value;
+    const d = parseInt(document.getElementById('det-dias').value)||0;
+    const fb = document.getElementById('det-fecha').value;
     const ds = calcDue(fb, d);
-    overlay.querySelector('#det-due-preview').innerHTML = '📅 Vence: <strong>'+(d>0&&ds?ds:'Contado')+'</strong>';
+    document.getElementById('det-due-preview').innerHTML = '📅 Vence: <strong>'+(d>0&&ds?ds:'Contado')+'</strong>';
     return d > 0 ? ds : null;
   };
-  overlay.querySelector('#det-dias').addEventListener('input', upd);
-  overlay.querySelector('#det-fecha').addEventListener('input', upd);
+  document.getElementById('det-dias').addEventListener('input', upd);
+  document.getElementById('det-fecha').addEventListener('input', upd);
   overlay.querySelector('#det-save-btn').onclick = () => {
-    const dias = parseInt(overlay.querySelector('#det-dias').value)||0;
-    const fb = overlay.querySelector('#det-fecha').value;
-    const factura = overlay.querySelector('#det-factura').value.trim();
-    const due = upd();
-    overlay.remove();
-    // Save on pedido (localStorage)
+    const dias = parseInt(document.getElementById('det-dias').value)||0;
+    const fb = document.getElementById('det-fecha').value;
+    const factura = (document.getElementById('det-factura').value||'').trim();
+    const pad = n => String(n).padStart(2,'0');
+    let due = null;
+    if (dias > 0 && fb) {
+      const d = new Date(fb+'T12:00:00'); d.setDate(d.getDate()+dias);
+      due = d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+    }
+    document.getElementById('cobro-detalle-overlay').remove();
+    // Save on pedido
     p.diasCredito = dias;
     p.dueDate = due;
     p.fechaEntrega = fb;
@@ -1726,6 +1731,7 @@ function editCobroDetalles(clienteId, weekKey, vrKey) {
     saveConfirmaciones();
     pushConfirmacionesSheets();
     renderCobros();
+    showToast('✅ Detalles guardados' + (factura?' · '+factura:'') + (due?' · vence '+due:''));
   };
   overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
 }
