@@ -1709,12 +1709,22 @@ function editCobroDetalles(clienteId, weekKey, vrKey) {
     const factura = overlay.querySelector('#det-factura').value.trim();
     const due = upd();
     overlay.remove();
+    // Save on pedido (localStorage)
     p.diasCredito = dias;
     p.dueDate = due;
     p.fechaEntrega = fb;
     p.numFactura = factura;
     savePedidos();
-    pushPedidoSheets(p);
+    // Also save in CONFIRMACIONES so it survives Supabase sync
+    const ck = getConfKey(weekKey, clienteId);
+    CONFIRMACIONES[ck] = Object.assign({}, CONFIRMACIONES[ck]||{}, {
+      numFactura: factura,
+      diasCredito: dias,
+      dueDate: due,
+      fechaEntrega: fb
+    });
+    saveConfirmaciones();
+    pushConfirmacionesSheets();
     renderCobros();
   };
   overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
@@ -3490,7 +3500,19 @@ function getConfKey(weekKey, clienteId) { return `${weekKey}_${clienteId}`; }
 
 function getConf(weekKey, clienteId) {
   const key = getConfKey(weekKey, clienteId);
-  return CONFIRMACIONES[key] || null;
+  const conf = CONFIRMACIONES[key];
+  if (!conf) return null;
+  // Restore factura/credit data back to pedido if stored in confirmacion
+  if (conf.numFactura !== undefined || conf.diasCredito !== undefined) {
+    const p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey);
+    if (p) {
+      if (conf.numFactura !== undefined) p.numFactura = conf.numFactura;
+      if (conf.diasCredito !== undefined) p.diasCredito = conf.diasCredito;
+      if (conf.dueDate !== undefined) p.dueDate = conf.dueDate;
+      if (conf.fechaEntrega !== undefined) p.fechaEntrega = conf.fechaEntrega;
+    }
+  }
+  return conf;
 }
 
 function setConf(weekKey, clienteId, data) {
