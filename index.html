@@ -1643,53 +1643,150 @@ function genWeek() {
   renderPedidos();
 }
 
-function togglePago(clienteId, weekKey, vrKey) {
-  // Find pedido — use vrKey for rapidas (unique), otherwise by clienteId+weekKey
+// ── editCobroDetalles — factura + días de crédito ──
+function editCobroDetalles(clienteId, weekKey, vrKey) {
   let p;
-  if (vrKey) {
-    p = PEDIDOS.find(x => x.vrKey === vrKey || x.autoKey === vrKey);
-  }
-  if (!p) {
-    p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
-  }
+  if (vrKey && vrKey !== '') p = PEDIDOS.find(x => x.vrKey === vrKey || x.autoKey === vrKey);
+  if (!p) p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
+  if (!p) return;
+  const cliente = CLIENTES.find(c => c.id === (p.clienteId || p.id)) || {};
+  const diasDefault = p.diasCredito !== undefined ? p.diasCredito : (cliente.diasCredito || 0);
+  const monto = montoConf(p, weekKey);
+  const pad = n => String(n).padStart(2,'0');
+  const base = p.fechaEntrega || new Date().toISOString().split('T')[0];
+  const calcDue = (fb, dias) => {
+    if (!dias) return null;
+    const d = new Date(fb + 'T12:00:00'); d.setDate(d.getDate()+dias);
+    return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+  };
+  const overlay = document.createElement('div');
+  overlay.id = 'cobro-detalle-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:var(--bg);border-radius:16px 16px 0 0;padding:24px 24px 40px;width:100%;max-width:500px;box-shadow:0 -4px 32px rgba(0,0,0,0.2)">
+      <div style="font-size:16px;font-weight:600;margin-bottom:2px">Detalles de cobro</div>
+      <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${p.nombre} · ${moneyFmt(monto)}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--text3);display:block;margin-bottom:4px">DÍAS DE CRÉDITO</label>
+          <input type="number" id="det-dias" value="${diasDefault}" min="0" max="90"
+            style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg);box-sizing:border-box">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:var(--text3);display:block;margin-bottom:4px">FECHA ENTREGA</label>
+          <input type="date" id="det-fecha" value="${base}"
+            style="width:100%;padding:9px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:13px;background:var(--bg);box-sizing:border-box">
+        </div>
+      </div>
+      <div style="margin-bottom:12px">
+        <label style="font-size:11px;font-weight:600;color:var(--text3);display:block;margin-bottom:4px">N° FACTURA ELECTRÓNICA <span style="font-weight:400;opacity:.6">(opcional)</span></label>
+        <input type="text" id="det-factura" value="${p.numFactura||''}" placeholder="Ej: FE-001-2026-00123456"
+          style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--bg);box-sizing:border-box">
+      </div>
+      <div id="det-due-preview" style="font-size:12px;color:var(--text3);margin-bottom:16px;padding:8px 12px;background:var(--bg2);border-radius:8px">
+        📅 Vence: <strong>${diasDefault > 0 ? (calcDue(base,diasDefault)||'—') : 'Contado'}</strong>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="document.getElementById('cobro-detalle-overlay').remove()"
+          style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit;font-size:15px">Cancelar</button>
+        <button id="det-save-btn"
+          style="flex:2;padding:14px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-weight:700;font-family:inherit;font-size:16px;letter-spacing:.3px">💾 Guardar detalles</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const upd = () => {
+    const d = parseInt(overlay.querySelector('#det-dias').value)||0;
+    const fb = overlay.querySelector('#det-fecha').value;
+    const ds = calcDue(fb, d);
+    overlay.querySelector('#det-due-preview').innerHTML = '📅 Vence: <strong>'+(d>0&&ds?ds:'Contado')+'</strong>';
+    return d > 0 ? ds : null;
+  };
+  overlay.querySelector('#det-dias').addEventListener('input', upd);
+  overlay.querySelector('#det-fecha').addEventListener('input', upd);
+  overlay.querySelector('#det-save-btn').onclick = () => {
+    const dias = parseInt(overlay.querySelector('#det-dias').value)||0;
+    const fb = overlay.querySelector('#det-fecha').value;
+    const factura = overlay.querySelector('#det-factura').value.trim();
+    const due = upd();
+    overlay.remove();
+    p.diasCredito = dias;
+    p.dueDate = due;
+    p.fechaEntrega = fb;
+    p.numFactura = factura;
+    savePedidos();
+    pushPedidoSheets(p);
+    renderCobros();
+  };
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+}
+
+function togglePago(clienteId, weekKey, vrKey) {
+  let p;
+  if (vrKey && vrKey !== '') p = PEDIDOS.find(x => x.vrKey === vrKey || x.autoKey === vrKey);
+  if (!p) p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey && !x.esVentaRapida && !x.esEntregaRapida);
   if (!p) return;
   const wasPaid = p.pago === 'pagado';
-  p.pago = wasPaid ? 'pendiente' : 'pagado';
-
-  // Unique key for finanzas — always use vrKey/autoKey for rapidas
-  const pagoKey = (p.vrKey || p.autoKey) && (p.esVentaRapida || p.esEntregaRapida)
-    ? 'pago_' + (p.vrKey || p.autoKey)
-    : 'pago_' + weekKey + '_' + clienteId;
-
-  if (!wasPaid) {
-    // Marcar cobrado → registrar en Finanzas
+  const pagoKey = (p.vrKey||p.autoKey) && (p.esVentaRapida||p.esEntregaRapida)
+    ? 'pago_'+(p.vrKey||p.autoKey) : 'pago_'+weekKey+'_'+clienteId;
+  if (wasPaid) {
+    p.pago = 'pendiente';
+    const idx = MOVIMIENTOS.findIndex(m => m.autoKey === pagoKey);
+    if (idx !== -1) { MOVIMIENTOS.splice(idx, 1); saveMovimientos(); }
+    savePedidos(); pushPedidoSheets(p);
+    renderPedidos(); renderCobros(); renderFinanzas();
+    return;
+  }
+  // Marcar cobrado — ask only método de pago, use saved factura/dias
+  const pad = n => String(n).padStart(2,'0');
+  const hoy = new Date();
+  const fechaHoy = hoy.getFullYear()+'-'+pad(hoy.getMonth()+1)+'-'+pad(hoy.getDate());
+  const monto = montoConf(p, weekKey);
+  const overlay = document.createElement('div');
+  overlay.id = 'cobro-pago-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:var(--bg);border-radius:16px 16px 0 0;padding:24px 24px 40px;width:100%;max-width:500px;box-shadow:0 -4px 32px rgba(0,0,0,0.2)">
+      <div style="font-size:16px;font-weight:600;margin-bottom:2px">Confirmar cobro</div>
+      <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${p.nombre} · ${moneyFmt(monto)}${p.numFactura?' · <span style="font-family:monospace">'+p.numFactura+'</span>':''}</div>
+      <div style="margin-bottom:16px">
+        <label style="font-size:11px;font-weight:600;color:var(--text3);display:block;margin-bottom:4px">MÉTODO DE PAGO</label>
+        <select id="cobro-metodo" style="width:100%;padding:12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:15px;background:var(--bg)">
+          <option value="sinpe">SINPE</option>
+          <option value="transferencia">Transferencia</option>
+          <option value="efectivo">Efectivo</option>
+          <option value="tarjeta">Tarjeta</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="document.getElementById('cobro-pago-overlay').remove()"
+          style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit;font-size:15px">Cancelar</button>
+        <button id="cobro-pay-btn"
+          style="flex:2;padding:12px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-weight:600;font-family:inherit;font-size:15px">✅ Cobrado</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#cobro-pay-btn').onclick = () => {
+    const metodo = overlay.querySelector('#cobro-metodo').value;
+    overlay.remove();
+    p.pago = 'pagado'; p.fechaCobro = fechaHoy;
     const alreadyExists = MOVIMIENTOS.some(m => m.autoKey === pagoKey);
     if (!alreadyExists) {
-      // Use confirmed monto if available, otherwise fmt default
-      const monto = montoConf(p, weekKey);
       MOVIMIENTOS.push({
-        id: NMID++,
-        fecha: new Date().toISOString().split('T')[0],
-        tipo: 'venta',
-        desc: p.nombre + (p.esVentaRapida || p.esEntregaRapida ? ' (entrega extra)' : '') + ' — ' + (p.weekLabel || weekKey),
-        monto: monto,
-        pago: 'sinpe',
-        notas: 'Auto-registrado al marcar cobrado',
+        id: NMID++, fecha: fechaHoy, tipo: 'venta',
+        desc: p.nombre+(p.esVentaRapida||p.esEntregaRapida?' (extra)':'')+' — '+(p.weekLabel||weekKey),
+        monto, pago: metodo,
+        factura: !!(p.numFactura), numFactura: p.numFactura||'',
+        dueDate: p.dueDate||null, diasCredito: p.diasCredito||0,
+        notas: p.diasCredito>0?'Crédito '+p.diasCredito+'d':'Contado',
         autoKey: pagoKey
       });
       saveMovimientos();
+      sbUpsert('kv_store',{key:'movimientos',value:JSON.stringify(MOVIMIENTOS)}).catch(()=>{});
     }
-  } else {
-    // Desmarcar cobrado → eliminar de Finanzas
-    const idx = MOVIMIENTOS.findIndex(m => m.autoKey === pagoKey);
-    if (idx !== -1) { MOVIMIENTOS.splice(idx, 1); saveMovimientos(); }
-  }
-
-  savePedidos();
-  if (p) pushPedidoSheets(p);
-  renderPedidos();
-  renderCobros();
-  renderFinanzas();
+    savePedidos(); pushPedidoSheets(p);
+    renderPedidos(); renderCobros(); renderFinanzas();
+  };
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
 }
 
 function renderPedidos() {
@@ -1857,6 +1954,8 @@ function renderCobros() {
   const tPag = pag.reduce((a,p)=>a+montoConf(p, wkKey||p.weekKey),0);
   const tPen = pen.reduce((a,p)=>a+montoConf(p, wkKey||p.weekKey),0);
   const tot = semP.reduce((a,p)=>a+montoConf(p, wkKey||p.weekKey),0);
+  // For pendientes view, total shown is only pending (not paid)
+  const displayTotal = cobFiltro === 'pendientes' ? tPen : tot;
 
   // Update buttons active state
   ['cobBtn-semana','cobBtn-pendientes'].forEach(id=>{
@@ -1874,7 +1973,7 @@ function renderCobros() {
   document.getElementById('cobros-metrics').innerHTML = `
     <div class="metric-card ${cobFiltro==='pendientes'?'accent':''}">
       <div class="label">${cobFiltro==='pendientes'?'Total pendiente':'Total semana'}</div>
-      <div class="value" style="font-size:20px">${moneyFmt(cobFiltro==='pendientes'?tPen:tot)}</div>
+      <div class="value" style="font-size:20px">${moneyFmt(displayTotal)}</div>
       <div class="sub">${cobFiltro==='pendientes'?pen.length:semP.length} pedidos</div>
     </div>
     ${cobFiltro==='semana'?`
@@ -1922,7 +2021,7 @@ function renderCobros() {
     const byWeek = {};
     sorted.forEach(p=>{ (byWeek[p.weekKey]||(byWeek[p.weekKey]=[])).push(p); });
     el.innerHTML = Object.entries(byWeek).sort((a,b)=>a[0].localeCompare(b[0])).map(([wkey, pedidos])=>{
-      const weekTotal = pedidos.reduce((a,p)=>a+fmtMonto(p.fmt),0);
+      const weekTotal = pedidos.reduce((a,p)=>a+montoConf(p,wkey),0);
       const wLabel = pedidos[0].weekLabel || wkey;
       return `
         <div style="margin-bottom:20px">
@@ -1935,7 +2034,11 @@ function renderCobros() {
               <div class="cobro-nombre">${p.nombre}${p.esVentaRapida||p.esEntregaRapida?' <span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:10px;font-weight:600">extra</span>':''}</div>
               <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmt}${p.numFactura?' · <span style="font-family:monospace;font-size:11px">'+p.numFactura+'</span>':''}</div>
               ${p.dueDate && p.pago!=='pagado' ? dueDateBadge(p) : ''}
-              <div class="cobro-monto" style="cursor:pointer" onclick="editMontoCobro(${p.id},'${wkey}','${p.vrKey||p.autoKey||''}')" title="Toca para editar monto">${moneyFmt(montoConf(p,'${wkey}'))} ✏️</div>
+              <div style="display:flex;align-items:center;gap:4px">
+                <span class="cobro-monto">${moneyFmt(monto)}</span>
+                <button onclick="editMontoCobro(${p.id},'${wkey}','${vrk}')" title="Editar monto" style="background:none;border:none;cursor:pointer;font-size:15px;padding:2px 4px">✏️</button>
+                <button onclick="editCobroDetalles(${p.id},'${wkey}','${vrk}')" title="Factura / días crédito" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px 4px">🧾</button>
+              </div>
               <div style="min-width:130px;text-align:right">
                 ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none;margin-right:4px">📱 WA</a>`:''}
                 <button class="pay-btn pendiente btn-sm" onclick="togglePago(${p.id},'${wkey}','${p.vrKey||''}');renderCobros()">
@@ -1953,7 +2056,11 @@ function renderCobros() {
         <div class="cobro-nombre">${p.nombre}${p.esVentaRapida||p.esEntregaRapida?' <span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:10px;font-weight:600">extra</span>':''}</div>
         <div class="cobro-fmt">${RDOT2[p.ruta]||p.ruta} · ${fmtStrConf(p,getWeekDates(cobrosWeekOffset).key)}${p.numFactura?' · <span style="font-family:monospace;font-size:11px">'+p.numFactura+'</span>':''}</div>
         ${p.dueDate && p.pago!=='pagado' ? dueDateBadge(p) : ''}
-        <div class="cobro-monto" style="cursor:pointer" onclick="editMontoCobro(${p.id},'${getWeekDates(cobrosWeekOffset).key}','${p.vrKey||p.autoKey||''}')" title="Toca para editar monto">${moneyFmt(montoConf(p,getWeekDates(cobrosWeekOffset).key))} ✏️</div>
+        <div style="display:flex;align-items:center;gap:4px">
+          <span class="cobro-monto">${moneyFmt(montoConf(p,getWeekDates(cobrosWeekOffset).key))}</span>
+          <button onclick="editMontoCobro(${p.id},'${getWeekDates(cobrosWeekOffset).key}','${p.vrKey||p.autoKey||''}')" title="Editar monto" style="background:none;border:none;cursor:pointer;font-size:15px;padding:2px 4px">✏️</button>
+          <button onclick="editCobroDetalles(${p.id},'${getWeekDates(cobrosWeekOffset).key}','${p.vrKey||p.autoKey||''}')" title="Factura / días crédito" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px 4px">🧾</button>
+        </div>
         ${notaCobro?`<div style="width:100%;font-size:11px;color:var(--text3);font-style:italic;padding:2px 0">📝 ${notaCobro}</div>`:''}
         <div style="min-width:130px;text-align:right;display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end">
           ${p.tel?`<a href="https://wa.me/506${p.tel.replace(/\D/g,'')}" target="_blank" class="btn btn-xs" style="text-decoration:none">📱</a>`:''}
