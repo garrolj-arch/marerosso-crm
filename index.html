@@ -4186,7 +4186,7 @@ function renderRuta() {
             <div class="parada-nombre">${item.nombre}
               <span class="badge" style="background:#E8F4FD;color:#1A4E8A;border:1px solid #BFDBFE;margin-left:6px">Rápida</span>
             </div>
-            <div class="parada-dir">📍 ${item.zona||''}${item.notas?' — '+item.notas.substring(0,60):''}</div>
+            <div class="parada-dir" style="cursor:pointer" onclick="(function(){const lat=${item.lat||'null'},lng=${item.lng||'null'};if(lat&&lng){window.open('https://waze.com/ul?ll='+lat+','+lng+'&navigate=yes','_blank')}else{window.open('https://waze.com/ul?q='+encodeURIComponent('${(item.zona||'')+(item.notas?' '+item.notas:'')+', Costa Rica'}')+'&navigate=yes','_blank')}})()">📍 ${item.zona||''}${item.notas?' — '+item.notas.substring(0,60):''}</div>
             <div class="parada-meta">
               ${breakdownHTML}
               <strong style="margin-left:4px">${moneyFmt(monto)}</strong>
@@ -4257,7 +4257,7 @@ function renderRuta() {
           <div class="parada-nombre">${c.nombre}
             <span class="badge ${c.seg==='domicilio'?'badge-dom':'badge-b2b'}" style="margin-left:6px">${c.seg==='domicilio'?'Dom':'B2B'}</span>
           </div>
-          <div class="parada-dir">📍 ${c.zona||''}${c.notas?' — '+c.notas.substring(0,60):''}</div>
+          <div class="parada-dir" style="cursor:pointer" onclick="(function(){const lat=${c.lat||'null'},lng=${c.lng||'null'};if(lat&&lng){window.open('https://waze.com/ul?ll='+lat+','+lng+'&navigate=yes','_blank')}else{window.open('https://waze.com/ul?q='+encodeURIComponent('${(c.zona||'')+(c.notas?' '+c.notas:'')+', Costa Rica'}')+'&navigate=yes','_blank')}})()">📍 ${c.zona||''}${c.notas?' — '+c.notas.substring(0,60):''}</div>
           <div class="parada-meta">
             ${breakdownHTML}
             <strong style="margin-left:4px">${moneyFmt(monto)}</strong>
