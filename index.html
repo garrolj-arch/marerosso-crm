@@ -3997,12 +3997,38 @@ function filterRuta(query) {
 // ═══════════════════════════════════════════════
 // RUTA CUSTOM ORDER (drag & drop)
 // ═══════════════════════════════════════════════
+// In-memory cache for route orders (populated on sync)
+let RUTA_ORDERS = {};
+
 function getRutaOrderKey(dia, weekKey) { return 'ruta_order_' + weekKey + '_' + dia; }
 function getRutaOrder(dia, weekKey) {
-  try { const s = lsGet(getRutaOrderKey(dia, weekKey)); return s ? JSON.parse(s) : null; } catch(e) { return null; }
+  const key = getRutaOrderKey(dia, weekKey);
+  // Check in-memory cache first, then localStorage as fallback
+  if (RUTA_ORDERS[key]) return RUTA_ORDERS[key];
+  try { const s = lsGet(key); return s ? JSON.parse(s) : null; } catch(e) { return null; }
 }
 function saveRutaOrder(dia, weekKey, order) {
-  try { lsSet(getRutaOrderKey(dia, weekKey), JSON.stringify(order)); } catch(e) {}
+  const key = getRutaOrderKey(dia, weekKey);
+  // Save locally and in memory immediately
+  RUTA_ORDERS[key] = order;
+  try { lsSet(key, JSON.stringify(order)); } catch(e) {}
+  // Push to Supabase so all devices (Ronald's phone) see same order
+  sbUpsert('kv_store', { key: 'ruta_orders', value: JSON.stringify(RUTA_ORDERS) }).catch(()=>{});
+}
+async function loadRutaOrdersFromSupabase() {
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/kv_store?key=eq.ruta_orders&select=value`, {
+      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
+    });
+    const data = await res.json();
+    if (data && data[0] && data[0].value) {
+      const remote = JSON.parse(data[0].value);
+      // Merge remote into local (remote wins for cross-device sync)
+      RUTA_ORDERS = { ...RUTA_ORDERS, ...remote };
+      // Also persist each key in localStorage as cache
+      Object.entries(RUTA_ORDERS).forEach(([k, v]) => { try { lsSet(k, JSON.stringify(v)); } catch(e){} });
+    }
+  } catch(e) { /* silently fail, localStorage fallback still works */ }
 }
 function applyRutaOrder(stops, dia, weekKey) {
   const order = getRutaOrder(dia, weekKey);
@@ -4687,9 +4713,10 @@ async function syncAll() {
     if (localPedidos.length) await pushPedidosBulk(localPedidos);
     // Push confirmaciones
     await pushConfirmacionesSheets();
-    // Sync inventario and movimientos
+    // Sync inventario, movimientos and ruta orders
     await syncInventarioFromSupabase();
     await syncMovimientosFromSupabase();
+    await loadRutaOrdersFromSupabase();
     NIID = Math.max(...(INVENTARIO.length ? INVENTARIO.map(i=>i.id||0) : [0]), 0) + 1;
     NMID = Math.max(...(MOVIMIENTOS.length ? MOVIMIENTOS.map(m=>m.id||0) : [0]), 0) + 1;
     renderDashboard();
@@ -4715,6 +4742,7 @@ setInterval(async () => {
     await syncPedidosFromSheets(wkCurr.key);
     await syncInventarioFromSupabase();
     await syncMovimientosFromSupabase();
+    await loadRutaOrdersFromSupabase();
     NIID = Math.max(...(INVENTARIO.length ? INVENTARIO.map(i=>i.id||0) : [0]), 0) + 1;
     NMID = Math.max(...(MOVIMIENTOS.length ? MOVIMIENTOS.map(m=>m.id||0) : [0]), 0) + 1;
     renderRuta();
