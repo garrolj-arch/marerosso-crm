@@ -473,7 +473,7 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         Agregar cliente
       </button>
-      <button class="btn btn-primary" onclick="genWeek()">
+      <button class="btn btn-primary" id="btn-gen-week" onclick="genWeek()" disabled title="Esperando sincronización...">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
         Generar semana
       </button>
@@ -1640,6 +1640,9 @@ function genWeek() {
     });
   }
   savePedidos();
+  // Push inmediatamente a Supabase para que todos los dispositivos los vean
+  const newPeds = PEDIDOS.filter(p => p.weekKey === wk.key);
+  pushPedidosBulk(newPeds).catch(e => console.warn('genWeek push error:', e));
   renderPedidos();
 }
 
@@ -4700,6 +4703,9 @@ async function syncAll() {
     renderCobros();
     renderInventario();
     renderFinanzas();
+    // Habilitar botón de generar semana — clientes ya cargados
+    const btnGW = document.getElementById('btn-gen-week');
+    if (btnGW) { btnGW.disabled = false; btnGW.title = ''; }
     showSync('ok');
   } catch(e) {
     showSync('error', 'Error al sincronizar');
