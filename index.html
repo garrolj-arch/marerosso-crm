@@ -4199,6 +4199,9 @@ function renderRuta() {
     const diaLabel = dia==='lunes'?'Santa Ana / Escazú / Lindora':dia==='martes'?'Este / Cartago':'Heredia / Alajuela';
     const totalParadas = sorted.length + diaQuick.length;
     
+    // Construir lista completa de paradas
+    const allStops = [...sorted.map(c => ({...c, _isClient: true})), ...diaQuick.map(p => ({...p, _isClient: false}))];
+
     // Separar pendientes y entregados
     const pendingStops = allStops.filter(item => {
       const pago = PEDIDOS.find(p => p.id === item.id && p.weekKey === wk.key);
