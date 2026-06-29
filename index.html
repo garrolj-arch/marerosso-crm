@@ -1527,8 +1527,12 @@ function fmtWA(fmt) { return fmt.map(f=>`*${f.q} ${f.q>1?'cartones':'cartón'} d
 function moneyFmt(n) { return '₡'+Math.round(n).toLocaleString('es-CR'); }
 function getWeekDates(offset=0) {
   const now = new Date();
-  const day = now.getDay() || 7;
-  const mon = new Date(now); mon.setDate(now.getDate() - day + 1 + offset*7);
+  const day = now.getDay(); // 0=domingo, 1=lunes ... 6=sábado
+  // El domingo se trata como inicio de la semana siguiente (no fin de la actual)
+  // Así confirmaciones del domingo siempre apuntan a la semana que empieza el lunes
+  const adjustedOffset = (day === 0) ? offset + 1 : offset;
+  const daysToMonday = (day === 0) ? -6 : 1 - day; // retroceder al lunes de esta semana
+  const mon = new Date(now); mon.setDate(now.getDate() + daysToMonday + adjustedOffset*7);
   const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
   const opts = {day:'2-digit',month:'short'};
   // Use local date for weekKey to avoid UTC midnight timezone shift
