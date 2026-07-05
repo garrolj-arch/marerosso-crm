@@ -1623,13 +1623,13 @@ function destroyChart(id) { const el=document.getElementById("chart-"+id); if(el
 function changeWeek(dir) { currentWeekOffset += dir; renderPedidos(); }
 function setPedRuta(v, el) { fPedRuta=v; setFilter('fg-ped-ruta',v,el); renderPedidos(); }
 
-function genWeek() {
+async function genWeek(skipConfirm = false) {
   const wk = getWeekDates(currentWeekOffset);
   const act = CLIENTES.filter(c=>c.estado==='activo'&&c.ruta!=='pickup');
   const existing = PEDIDOS.filter(p=>p.weekKey===wk.key);
   
   if(existing.length > 0) {
-    if(!confirm('Ya hay pedidos para ' + wk.label + '. ¿Regenerar?')) return;
+    if(!skipConfirm && !confirm('Ya hay pedidos para ' + wk.label + '. ¿Regenerar?')) return;
     // Save payment status before removing
     const pagoMap = {};
     existing.forEach(p => { pagoMap[p.id] = p.pago; });
@@ -1653,9 +1653,9 @@ function genWeek() {
     });
   }
   savePedidos();
-  // Push inmediatamente a Supabase para que todos los dispositivos los vean
+  // Push inmediatamente a Supabase y esperar que termine
   const newPeds = PEDIDOS.filter(p => p.weekKey === wk.key);
-  pushPedidosBulk(newPeds).catch(e => console.warn('genWeek push error:', e));
+  await pushPedidosBulk(newPeds).catch(e => console.warn('genWeek push error:', e));
   renderPedidos();
 }
 
@@ -4774,6 +4774,13 @@ async function syncAll() {
     await loadRutaOrdersFromSupabase();
     NIID = Math.max(...(INVENTARIO.length ? INVENTARIO.map(i=>i.id||0) : [0]), 0) + 1;
     NMID = Math.max(...(MOVIMIENTOS.length ? MOVIMIENTOS.map(m=>m.id||0) : [0]), 0) + 1;
+    // Auto-generar semana si no hay pedidos para la semana actual — solo en carga inicial
+    const wkAuto = getWeekDates(0);
+    const pedsSemana = PEDIDOS.filter(p => p.weekKey === wkAuto.key && !p.esVentaRapida && !p.esEntregaRapida);
+    if (pedsSemana.length === 0 && CLIENTES.filter(c => c.estado === 'activo').length > 0) {
+      console.log('Auto-generando semana', wkAuto.key, '— no había pedidos');
+      await genWeek(true); // skipConfirm — generación automática sin diálogo
+    }
     renderDashboard();
     renderClientes();
     renderRuta();
