@@ -1369,25 +1369,29 @@ async function syncPedidosFromSheets(weekKey) {
         vrKey: (p.auto_key||'').startsWith('vr_') ? p.auto_key : undefined,
         autoKey: p.auto_key || ''
       }));
-      // Merge inteligente: para cada pedido remoto, solo actualizar campos
-      // que pueden cambiar en otros dispositivos (pago, entregado, notaCobro)
-      // sin pisar toda la semana (evita race conditions)
-      mapped.forEach(remote => {
-        const local = PEDIDOS.find(p => p.id === remote.id && p.weekKey === weekKey);
-        if (local) {
-          // Solo actualizar campos de estado — no datos base del pedido
-          local.pago = remote.pago;
-          local.entregado = remote.entregado;
-          local.notaCobro = remote.notaCobro;
-          local.fechaCobro = remote.fechaCobro;
-        } else {
-          // Pedido nuevo que no existe en memoria (ej: agregado desde otro dispositivo)
-          PEDIDOS.push(remote);
-        }
-      });
+      PEDIDOS = PEDIDOS.filter(p => p.weekKey !== weekKey);
+      PEDIDOS = [...PEDIDOS, ...mapped];
       lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
     }
   } catch(e) { console.error('Pedidos sync error:', e); }
+}
+
+async function syncAllPendingPedidos() {
+  // Jala el estado de pago de TODOS los pedidos de Supabase en una sola query liviana
+  // Así el celular siempre ve cobros actualizados sin importar de qué semana son
+  try {
+    const data = await sbGet('pedidos', `select=id,week_key,pago,entregado,nota_cobro`);
+    if (!Array.isArray(data) || data.length === 0) return;
+    data.forEach(remote => {
+      const local = PEDIDOS.find(p => p.id === Number(remote.id) && p.weekKey === remote.week_key);
+      if (local) {
+        local.pago = remote.pago || 'pendiente';
+        local.entregado = remote.entregado || false;
+        local.notaCobro = remote.nota_cobro || '';
+      }
+    });
+    lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
+  } catch(e) { console.warn('syncAllPendingPedidos error:', e); }
 }
 
 function savePedidos() {
@@ -4775,8 +4779,12 @@ async function syncAll() {
     await syncConfirmacionesFromSheets();
     const wkCurr = getWeekDates(0);
     const wkNext = getWeekDates(1);
+    // Sincronizar semana actual y próxima completas
     await syncPedidosFromSheets(wkCurr.key);
     await syncPedidosFromSheets(wkNext.key);
+    // Jalar TODOS los pedidos pendientes de Supabase (cualquier semana)
+    // para que cobros de semanas anteriores se vean igual en todos los dispositivos
+    await syncAllPendingPedidos();
     // Push local pedidos for current week to Supabase
     const localPedidos = PEDIDOS.filter(p => p.weekKey === wkCurr.key || p.weekKey === wkNext.key);
     if (localPedidos.length) await pushPedidosBulk(localPedidos);
@@ -4819,6 +4827,7 @@ setInterval(async () => {
     await syncConfirmacionesFromSheets();
     const wkCurr = getWeekDates(0);
     await syncPedidosFromSheets(wkCurr.key);
+    await syncAllPendingPedidos();
     await syncInventarioFromSupabase();
     await syncMovimientosFromSupabase();
     await loadRutaOrdersFromSupabase();
