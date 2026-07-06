@@ -1979,7 +1979,7 @@ function renderCobros() {
     // All pending across all weeks — confirmed or quick delivery
     semP = PEDIDOS.filter(p => {
       if (p.pago !== 'pendiente') return false;
-      if (p.esEntregaRapida || p.esVentaRapida || (p.autoKey||'').startsWith('vr_')) return true;
+      if (p.esEntregaRapida || p.esVentaRapida || (p.autoKey||'').startsWith('vr_')) return p.entregado && true;
       // Only show delivered pedidos in cobros pendientes
       if (!p.entregado) return false;
       const conf = getConf(p.weekKey, p.id);
@@ -1992,6 +1992,8 @@ function renderCobros() {
       // For VR/ER pedidos: match by weekKey OR by fechaEntrega within the selected week range
       const isExtra = p.esEntregaRapida || p.esVentaRapida || (p.autoKey||'').startsWith('vr_') || (p.autoKey||'').startsWith('er_');
       if (isExtra) {
+        // Entregas rápidas solo aparecen en Cobros si están entregadas
+        if (!p.entregado) return false;
         if (p.weekKey === wkCob.key) return true;
         if (p.fechaEntrega) {
           const fe = new Date(p.fechaEntrega + 'T12:00:00');
@@ -4475,11 +4477,21 @@ function toggleEntregado(clienteId, weekKey) {
     const erInvKey = 'inv_'+(p.autoKey||p.vrKey||'');
     INVENTARIO = INVENTARIO.filter(i => i.autoKey !== erInvKey);
     saveInventario_data();
+    // Si estaba cobrado, reversar el cobro también
+    if (p.pago === 'pagado') {
+      p.pago = 'pendiente';
+      const pagoKey = (p.vrKey||p.autoKey) && (p.esVentaRapida||p.esEntregaRapida)
+        ? 'pago_'+(p.vrKey||p.autoKey) : 'pago_'+weekKey+'_'+clienteId;
+      const idx = MOVIMIENTOS.findIndex(m => m.autoKey === pagoKey);
+      if (idx !== -1) { MOVIMIENTOS.splice(idx, 1); saveMovimientos(); sbUpsert('kv_store',{key:'movimientos',value:JSON.stringify(MOVIMIENTOS)}).catch(()=>{}); }
+    }
   }
   savePedidos();
   if (p) pushPedidoSheets(p);
   renderRuta();
   renderInventario();
+  renderCobros();
+  renderFinanzas();
 }
 
 function editEntregaRapida(erKey, weekKey) {
