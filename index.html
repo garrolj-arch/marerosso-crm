@@ -1473,7 +1473,7 @@ const RL = {lunes:'Lunes — Santa Ana / Escazú / Lindora',martes:'Martes — E
 const RDOT = {lunes:'Lun',martes:'Mar',miercoles:'Mié',pickup:'Pick'};
 const FREQ_L = {semanal:'semanal',quincenal:'c/15d',variable:'variable'};
 
-function fmtMonto(fmt) { return fmt.reduce((a,f)=>a+f.q*f.p, 0); }
+function fmtMonto(fmt) { return fmt.reduce((a,f)=>a+f.q*(f.p||(f.u===15?3000:5000)), 0); }
 
 // Monto usando montoOverride > fmtOverride > default
 function montoConf(p, weekKey) {
@@ -1979,7 +1979,7 @@ function renderCobros() {
     // All pending across all weeks — confirmed or quick delivery
     semP = PEDIDOS.filter(p => {
       if (p.pago !== 'pendiente') return false;
-      if (p.esEntregaRapida || p.esVentaRapida || (p.autoKey||'').startsWith('vr_')) return p.entregado && true;
+      if (p.esEntregaRapida || p.esVentaRapida || (p.autoKey||'').startsWith('vr_')) return true;
       // Only show delivered pedidos in cobros pendientes
       if (!p.entregado) return false;
       const conf = getConf(p.weekKey, p.id);
@@ -1992,8 +1992,6 @@ function renderCobros() {
       // For VR/ER pedidos: match by weekKey OR by fechaEntrega within the selected week range
       const isExtra = p.esEntregaRapida || p.esVentaRapida || (p.autoKey||'').startsWith('vr_') || (p.autoKey||'').startsWith('er_');
       if (isExtra) {
-        // Entregas rápidas solo aparecen en Cobros si están entregadas
-        if (!p.entregado) return false;
         if (p.weekKey === wkCob.key) return true;
         if (p.fechaEntrega) {
           const fe = new Date(p.fechaEntrega + 'T12:00:00');
@@ -4346,6 +4344,7 @@ function renderRuta() {
               style="font-size:10px;padding:3px 10px;border-radius:20px;border:1px solid;cursor:pointer;font-family:inherit;${entregado?'background:#EAF3DE;color:#2D6A4F;border-color:#6EE7B7':'background:transparent;color:var(--text3);border-color:var(--border2)'}">
               ${entregado?'✓ Entregado':'Entregar'}
             </button>
+            ${entregado?`<button onclick="if(confirm('¿Reversar entrega?')){toggleEntregado(${c.id},'${wk.key}')}" style="font-size:10px;padding:3px 8px;border-radius:20px;border:1px solid #FCA5A5;background:#FEE2E2;color:#991B1B;cursor:pointer;font-family:inherit">↩ Reversar</button>`:''}
           </div>
         </div>
       </div>`;
@@ -4473,7 +4472,6 @@ function toggleEntregado(clienteId, weekKey) {
     // Reversar — borrar deducción de inventario
     const invKey = 'ruta_'+weekKey+'_'+clienteId;
     INVENTARIO = INVENTARIO.filter(i => i.autoKey !== invKey);
-    // También borrar el inv_ key de entregas rápidas
     const erInvKey = 'inv_'+(p.autoKey||p.vrKey||'');
     INVENTARIO = INVENTARIO.filter(i => i.autoKey !== erInvKey);
     saveInventario_data();
@@ -4483,7 +4481,7 @@ function toggleEntregado(clienteId, weekKey) {
       const pagoKey = (p.vrKey||p.autoKey) && (p.esVentaRapida||p.esEntregaRapida)
         ? 'pago_'+(p.vrKey||p.autoKey) : 'pago_'+weekKey+'_'+clienteId;
       const idx = MOVIMIENTOS.findIndex(m => m.autoKey === pagoKey);
-      if (idx !== -1) { MOVIMIENTOS.splice(idx, 1); saveMovimientos(); sbUpsert('kv_store',{key:'movimientos',value:JSON.stringify(MOVIMIENTOS)}).catch(()=>{}); }
+      if (idx !== -1) { MOVIMIENTOS.splice(idx,1); saveMovimientos(); sbUpsert('kv_store',{key:'movimientos',value:JSON.stringify(MOVIMIENTOS)}).catch(()=>{}); }
     }
   }
   savePedidos();
@@ -4498,12 +4496,13 @@ function editEntregaRapida(erKey, weekKey) {
   const p = PEDIDOS.find(x => x.autoKey === erKey || x.vrKey === erKey);
   if (!p) { alert('No se encontró la entrega.'); return; }
   
-  // Leer cantidades actuales del fmt
-  let gsp=0, gcp=0, pcp=0;
+  // Leer cantidades y precios actuales del fmt
+  let gsp=0, gcp=0, pcp=0, p30=5000, p15=3000;
   (p.fmt||[]).forEach(f => {
-    const defTipo = f.u===15?'pcp':(p.seg==='b2b'?'gsp':'gcp');
-    if(defTipo==='gsp') gsp=f.q; else if(defTipo==='gcp') gcp=f.q; else pcp=f.q;
+    if (f.u===15) { pcp=f.q; p15=f.p||3000; }
+    else { if(p.seg==='b2b') gsp=f.q; else gcp=f.q; p30=f.p||5000; }
   });
+  const montoActual = gsp*p30+gcp*p30+pcp*p15;
   
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
@@ -4511,20 +4510,21 @@ function editEntregaRapida(erKey, weekKey) {
     <div style="background:var(--bg);border-radius:16px 16px 0 0;padding:24px 24px 40px;width:100%;max-width:500px">
       <div style="font-size:16px;font-weight:600;margin-bottom:4px">✏️ Editar entrega rápida</div>
       <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${p.nombre}</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
         <div>
           <label style="font-size:11px;font-weight:600;color:#8B3A1E;display:block;margin-bottom:4px">G-SP</label>
-          <input id="er-edit-gsp" type="number" min="0" value="${gsp}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;text-align:center;font-family:inherit">
+          <input id="er-edit-gsp" type="number" min="0" value="${gsp}" oninput="document.getElementById('er-edit-monto').textContent='₡'+((parseInt(this.value)||0)*${p30}+(parseInt(document.getElementById('er-edit-gcp').value)||0)*${p30}+(parseInt(document.getElementById('er-edit-pcp').value)||0)*${p15}).toLocaleString('es-CR')" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;text-align:center;font-family:inherit">
         </div>
         <div>
           <label style="font-size:11px;font-weight:600;color:#1A4E8A;display:block;margin-bottom:4px">G-CP</label>
-          <input id="er-edit-gcp" type="number" min="0" value="${gcp}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;text-align:center;font-family:inherit">
+          <input id="er-edit-gcp" type="number" min="0" value="${gcp}" oninput="document.getElementById('er-edit-monto').textContent='₡'+((parseInt(document.getElementById('er-edit-gsp').value)||0)*${p30}+(parseInt(this.value)||0)*${p30}+(parseInt(document.getElementById('er-edit-pcp').value)||0)*${p15}).toLocaleString('es-CR')" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;text-align:center;font-family:inherit">
         </div>
         <div>
           <label style="font-size:11px;font-weight:600;color:#2D6A4F;display:block;margin-bottom:4px">P-CP</label>
-          <input id="er-edit-pcp" type="number" min="0" value="${pcp}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;text-align:center;font-family:inherit">
+          <input id="er-edit-pcp" type="number" min="0" value="${pcp}" oninput="document.getElementById('er-edit-monto').textContent='₡'+((parseInt(document.getElementById('er-edit-gsp').value)||0)*${p30}+(parseInt(document.getElementById('er-edit-gcp').value)||0)*${p30}+(parseInt(this.value)||0)*${p15}).toLocaleString('es-CR')" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;text-align:center;font-family:inherit">
         </div>
       </div>
+      <div id="er-edit-monto" style="font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;color:var(--primary)">₡${montoActual.toLocaleString('es-CR')}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button onclick="this.closest('div[style*=fixed]').remove()" 
           style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit">Cancelar</button>
@@ -4542,11 +4542,11 @@ function editEntregaRapida(erKey, weekKey) {
     const newGcp = parseInt(overlay.querySelector('#er-edit-gcp').value)||0;
     const newPcp = parseInt(overlay.querySelector('#er-edit-pcp').value)||0;
     
-    // Actualizar fmt del pedido
+    // Actualizar fmt del pedido preservando precios
     p.fmt = [];
-    if (newGsp > 0) p.fmt.push({u:30, q:newGsp});
-    if (newGcp > 0) p.fmt.push({u:30, q:newGcp});
-    if (newPcp > 0) p.fmt.push({u:15, q:newPcp});
+    if (newGsp > 0) p.fmt.push({u:30, q:newGsp, p:p30});
+    if (newGcp > 0) p.fmt.push({u:30, q:newGcp, p:p30});
+    if (newPcp > 0) p.fmt.push({u:15, q:newPcp, p:p15});
     
     // Actualizar deducción de inventario
     const invKey1 = 'ruta_'+weekKey+'_'+p.id;
