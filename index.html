@@ -4268,11 +4268,11 @@ function renderRuta() {
               <strong style="margin-left:4px">${moneyFmt(monto)}</strong>
               ${tel?'<a href="https://wa.me/506'+tel.replace(/\D/g,'')+'" target="_blank" style="color:var(--green);font-size:11px;text-decoration:none">📱 '+tel+'</a>':''}
               <span class="badge ${estadoPago==='pagado'?'badge-paid':'badge-pend'}" style="cursor:pointer" onclick="togglePago(${item.id},'${wk.key}');renderRuta()">${estadoPago==='pagado'?'Pagado':'Cobrar'}</span>
+              <button onclick="editEntregaRapida('${item.autoKey||item.vrKey}','${wk.key}')" title="Editar o reversar entrega" style="font-size:11px;padding:3px 8px;border-radius:20px;border:1px solid var(--border2);background:transparent;cursor:pointer;color:var(--text2);font-family:inherit">✏️ Editar</button>
             </div>
           </div>
         </div>`;
       }
-      const c = item;
       const conf = getConf(wk.key, c.id);
       const fo = (conf && conf.fmtOverride) || {};
       const pago = PEDIDOS.find(p=>p.id===c.id&&p.weekKey===wk.key);
@@ -4416,30 +4416,41 @@ function toggleEntregado(clienteId, weekKey) {
   
   // Auto-deduct from inventory when marked as delivered
   if (p.entregado) {
-    const conf = getConf(weekKey, clienteId);
-    const fmtOv = conf ? (conf.fmtOverride || {}) : {};
     let gsp=0, gcp=0, pcp=0;
-    // Use confirmed quantities (fmt_gsp/gcp/pcp) if available, otherwise fall back to client default
-    const hasNewKeys = fmtOv['fmt_gsp'] !== undefined || fmtOv['fmt_gcp'] !== undefined || fmtOv['fmt_pcp'] !== undefined;
-    if (hasNewKeys) {
-      gsp = fmtOv['fmt_gsp'] || 0;
-      gcp = fmtOv['fmt_gcp'] || 0;
-      pcp = fmtOv['fmt_pcp'] || 0;
-    } else {
-      // Fallback: read from old key format or client default
-      p.fmt.forEach(function(f) {
-        const defTipo = f.u===15?'pcp':(p.seg==='b2b'?'gsp':'gcp');
-        const fk = 'fmt'+f.u;
-        ['gsp','gcp','pcp'].forEach(function(k) {
-          const oldKey = fk+'_'+k;
-          let qty = fmtOv[oldKey] !== undefined ? fmtOv[oldKey] : (k===defTipo ? f.q : 0);
-          if (!qty) return;
-          if(k==='gsp') gsp+=qty;
-          else if(k==='gcp') gcp+=qty;
-          else pcp+=qty;
-        });
+
+    if (p.esEntregaRapida || p.esVentaRapida || (p.autoKey||'').startsWith('er_') || (p.autoKey||'').startsWith('vr_')) {
+      // Entrega/Venta rápida — leer cantidades directamente del fmt del pedido
+      (p.fmt||[]).forEach(f => {
+        const defTipo = f.u===15 ? 'pcp' : (p.seg==='b2b' ? 'gsp' : 'gcp');
+        if (defTipo==='gsp') gsp += f.q||0;
+        else if (defTipo==='gcp') gcp += f.q||0;
+        else if (defTipo==='pcp') pcp += f.q||0;
       });
+    } else {
+      // Pedido normal — usar confirmación si existe, si no el default del cliente
+      const conf = getConf(weekKey, clienteId);
+      const fmtOv = conf ? (conf.fmtOverride || {}) : {};
+      const hasNewKeys = fmtOv['fmt_gsp'] !== undefined || fmtOv['fmt_gcp'] !== undefined || fmtOv['fmt_pcp'] !== undefined;
+      if (hasNewKeys) {
+        gsp = fmtOv['fmt_gsp'] || 0;
+        gcp = fmtOv['fmt_gcp'] || 0;
+        pcp = fmtOv['fmt_pcp'] || 0;
+      } else {
+        p.fmt.forEach(function(f) {
+          const defTipo = f.u===15?'pcp':(p.seg==='b2b'?'gsp':'gcp');
+          const fk = 'fmt'+f.u;
+          ['gsp','gcp','pcp'].forEach(function(k) {
+            const oldKey = fk+'_'+k;
+            let qty = fmtOv[oldKey] !== undefined ? fmtOv[oldKey] : (k===defTipo ? f.q : 0);
+            if (!qty) return;
+            if(k==='gsp') gsp+=qty;
+            else if(k==='gcp') gcp+=qty;
+            else pcp+=qty;
+          });
+        });
+      }
     }
+
     // Register inventory deduction — P-CP counts as 0.5
     const invKey = 'ruta_'+weekKey+'_'+clienteId;
     if (!INVENTARIO.some(i => i.autoKey===invKey)) {
@@ -4448,7 +4459,7 @@ function toggleEntregado(clienteId, weekKey) {
         fecha: new Date().toISOString().split('T')[0],
         tipo: 'entrega',
         desc: 'Entrega: ' + p.nombre,
-        notas: 'Auto-registrado en ruta',
+        notas: (p.esEntregaRapida||p.esVentaRapida) ? 'Entrega flash' : 'Auto-registrado en ruta',
         gsp: -gsp, gcp: -gcp, pcp: -pcp,
         total: -(gsp + gcp + pcp * 0.5),
         autoKey: invKey
@@ -4456,14 +4467,116 @@ function toggleEntregado(clienteId, weekKey) {
       saveInventario_data();
     }
   } else {
-    // Undo inventory deduction
+    // Reversar — borrar deducción de inventario
     const invKey = 'ruta_'+weekKey+'_'+clienteId;
     INVENTARIO = INVENTARIO.filter(i => i.autoKey !== invKey);
+    // También borrar el inv_ key de entregas rápidas
+    const erInvKey = 'inv_'+(p.autoKey||p.vrKey||'');
+    INVENTARIO = INVENTARIO.filter(i => i.autoKey !== erInvKey);
     saveInventario_data();
   }
   savePedidos();
-  if (p) pushPedidoSheets(p); // sync to Sheets
+  if (p) pushPedidoSheets(p);
   renderRuta();
+  renderInventario();
+}
+
+function editEntregaRapida(erKey, weekKey) {
+  const p = PEDIDOS.find(x => x.autoKey === erKey || x.vrKey === erKey);
+  if (!p) { alert('No se encontró la entrega.'); return; }
+  
+  // Leer cantidades actuales del fmt
+  let gsp=0, gcp=0, pcp=0;
+  (p.fmt||[]).forEach(f => {
+    const defTipo = f.u===15?'pcp':(p.seg==='b2b'?'gsp':'gcp');
+    if(defTipo==='gsp') gsp=f.q; else if(defTipo==='gcp') gcp=f.q; else pcp=f.q;
+  });
+  
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:var(--bg);border-radius:16px 16px 0 0;padding:24px 24px 40px;width:100%;max-width:500px">
+      <div style="font-size:16px;font-weight:600;margin-bottom:4px">✏️ Editar entrega rápida</div>
+      <div style="font-size:13px;color:var(--text3);margin-bottom:16px">${p.nombre}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px">
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#8B3A1E;display:block;margin-bottom:4px">G-SP</label>
+          <input id="er-edit-gsp" type="number" min="0" value="${gsp}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;text-align:center;font-family:inherit">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#1A4E8A;display:block;margin-bottom:4px">G-CP</label>
+          <input id="er-edit-gcp" type="number" min="0" value="${gcp}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;text-align:center;font-family:inherit">
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:600;color:#2D6A4F;display:block;margin-bottom:4px">P-CP</label>
+          <input id="er-edit-pcp" type="number" min="0" value="${pcp}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;font-size:16px;text-align:center;font-family:inherit">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button onclick="this.closest('div[style*=fixed]').remove()" 
+          style="flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;font-family:inherit">Cancelar</button>
+        <button id="er-edit-delete"
+          style="flex:1;padding:12px;border:none;border-radius:8px;background:#FEE2E2;color:#991B1B;cursor:pointer;font-weight:600;font-family:inherit">🗑 Borrar entrega</button>
+        <button id="er-edit-save"
+          style="flex:2;padding:12px;border:none;border-radius:8px;background:var(--primary);color:#fff;cursor:pointer;font-weight:600;font-family:inherit">✅ Guardar cambios</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  
+  // Guardar cambios
+  overlay.querySelector('#er-edit-save').onclick = () => {
+    const newGsp = parseInt(overlay.querySelector('#er-edit-gsp').value)||0;
+    const newGcp = parseInt(overlay.querySelector('#er-edit-gcp').value)||0;
+    const newPcp = parseInt(overlay.querySelector('#er-edit-pcp').value)||0;
+    
+    // Actualizar fmt del pedido
+    p.fmt = [];
+    if (newGsp > 0) p.fmt.push({u:30, q:newGsp});
+    if (newGcp > 0) p.fmt.push({u:30, q:newGcp});
+    if (newPcp > 0) p.fmt.push({u:15, q:newPcp});
+    
+    // Actualizar deducción de inventario
+    const invKey1 = 'ruta_'+weekKey+'_'+p.id;
+    const invKey2 = 'inv_'+erKey;
+    INVENTARIO = INVENTARIO.filter(i => i.autoKey!==invKey1 && i.autoKey!==invKey2);
+    if (newGsp+newGcp+newPcp > 0) {
+      INVENTARIO.push({
+        id: NIID++, fecha: p.fechaEntrega || new Date().toISOString().split('T')[0],
+        tipo: 'entrega', desc: 'Entrega flash: '+p.nombre, notas: 'Editado',
+        gsp: -newGsp, gcp: -newGcp, pcp: -newPcp,
+        total: -(newGsp + newGcp + newPcp * 0.5),
+        autoKey: invKey2
+      });
+    }
+    saveInventario_data();
+    savePedidos();
+    pushPedidoSheets(p);
+    overlay.remove();
+    renderRuta(); renderCobros(); renderInventario();
+  };
+  
+  // Borrar entrega completa
+  overlay.querySelector('#er-edit-delete').onclick = () => {
+    if (!confirm('¿Borrar esta entrega rápida completamente?')) return;
+    // Borrar pedido
+    PEDIDOS = PEDIDOS.filter(x => x.autoKey !== erKey && x.vrKey !== erKey);
+    // Borrar inventario
+    const invKey1 = 'ruta_'+weekKey+'_'+p.id;
+    const invKey2 = 'inv_'+erKey;
+    INVENTARIO = INVENTARIO.filter(i => i.autoKey!==invKey1 && i.autoKey!==invKey2);
+    // Borrar movimiento de cobro si existe
+    MOVIMIENTOS = MOVIMIENTOS.filter(m => m.autoKey !== 'pago_'+erKey);
+    savePedidos(); saveInventario_data(); saveMovimientos();
+    // Borrar de Supabase
+    fetch(`${SUPA_URL}/rest/v1/pedidos?id=eq.${p.id}`, {
+      method: 'DELETE',
+      headers: {'apikey':SUPA_KEY,'Authorization':'Bearer '+SUPA_KEY}
+    }).catch(()=>{});
+    overlay.remove();
+    renderRuta(); renderCobros(); renderInventario(); renderFinanzas();
+  };
+  
+  overlay.onclick = e => { if(e.target===overlay) overlay.remove(); };
 }
 
 function buildWazeLink(dia) {
