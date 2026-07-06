@@ -1369,8 +1369,22 @@ async function syncPedidosFromSheets(weekKey) {
         vrKey: (p.auto_key||'').startsWith('vr_') ? p.auto_key : undefined,
         autoKey: p.auto_key || ''
       }));
-      PEDIDOS = PEDIDOS.filter(p => p.weekKey !== weekKey);
-      PEDIDOS = [...PEDIDOS, ...mapped];
+      // Merge inteligente: para cada pedido remoto, solo actualizar campos
+      // que pueden cambiar en otros dispositivos (pago, entregado, notaCobro)
+      // sin pisar toda la semana (evita race conditions)
+      mapped.forEach(remote => {
+        const local = PEDIDOS.find(p => p.id === remote.id && p.weekKey === weekKey);
+        if (local) {
+          // Solo actualizar campos de estado — no datos base del pedido
+          local.pago = remote.pago;
+          local.entregado = remote.entregado;
+          local.notaCobro = remote.notaCobro;
+          local.fechaCobro = remote.fechaCobro;
+        } else {
+          // Pedido nuevo que no existe en memoria (ej: agregado desde otro dispositivo)
+          PEDIDOS.push(remote);
+        }
+      });
       lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
     }
   } catch(e) { console.error('Pedidos sync error:', e); }
