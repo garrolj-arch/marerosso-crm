@@ -4273,6 +4273,7 @@ function renderRuta() {
           </div>
         </div>`;
       }
+      const c = item;
       const conf = getConf(wk.key, c.id);
       const fo = (conf && conf.fmtOverride) || {};
       const pago = PEDIDOS.find(p=>p.id===c.id&&p.weekKey===wk.key);
