@@ -1647,7 +1647,9 @@ async function genWeek(skipConfirm = false) {
   const existing = PEDIDOS.filter(p=>p.weekKey===wk.key);
   
   if(existing.length > 0) {
-    if(!skipConfirm && !confirm('Ya hay pedidos para ' + wk.label + '. ¿Regenerar?')) return;
+    // Si es auto-generación (skipConfirm), NO regenerar si ya hay pedidos — solo salir
+    if(skipConfirm) return;
+    if(!confirm('Ya hay pedidos para ' + wk.label + '. ¿Regenerar?')) return;
     // Save payment status before removing
     const pagoMap = {};
     existing.forEach(p => { pagoMap[p.id] = p.pago; });
