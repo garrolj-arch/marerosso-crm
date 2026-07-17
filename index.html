@@ -1341,7 +1341,18 @@ async function syncMovimientosFromSupabase() {
 function loadPedidos() {
   try {
     const saved = lsGet('mr_pedidos');
-    return saved ? JSON.parse(saved) : [];
+    if (!saved) return [];
+    const all = JSON.parse(saved);
+    // Solo cargar en memoria las últimas 4 semanas desde localStorage
+    // Semanas más viejas se jalan de Supabase cuando se necesitan (al ir a Cobros)
+    // Esto evita que el celular tenga datos viejos desactualizados en cache
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 28); // 4 semanas atrás
+    const cutoffKey = cutoff.toISOString().split('T')[0].substring(0,7); // YYYY-MM
+    return all.filter(p => {
+      if (!p.weekKey) return false;
+      return p.weekKey >= cutoffKey;
+    });
   } catch(e) { return []; }
 }
 
@@ -1983,6 +1994,17 @@ function renderCobros() {
   if (weekLbl) weekLbl.textContent = cobrosWeekOffset === 0 ? 'Semana actual' : (cobrosWeekOffset > 0 ? 'Semana futura — pagos anticipados' : 'Semana pasada — pendientes');
   const wk = getWeekDates(currentWeekOffset);
   const cobFiltro = window._cobFiltro || 'semana';
+
+  // Si es vista "todos los pendientes", sincronizar estados de pago primero
+  if (cobFiltro === 'pendientes' && !window._cobSyncing) {
+    window._cobSyncing = true;
+    syncAllPendingPedidos().then(() => {
+      window._cobSyncing = false;
+      renderCobros();
+    }).catch(() => { window._cobSyncing = false; });
+    return; // Esperar sync antes de renderizar
+  }
+  window._cobSyncing = false;
 
   // Determine which pedidos to show
   const cobSearch = (document.getElementById('cobros-search')?.value || '').toLowerCase();
