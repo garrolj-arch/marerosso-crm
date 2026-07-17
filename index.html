@@ -1369,8 +1369,18 @@ async function syncPedidosFromSheets(weekKey) {
         vrKey: (p.auto_key||'').startsWith('vr_') ? p.auto_key : undefined,
         autoKey: p.auto_key || ''
       }));
-      PEDIDOS = PEDIDOS.filter(p => p.weekKey !== weekKey);
-      PEDIDOS = [...PEDIDOS, ...mapped];
+      // Merge inteligente: actualizar estado por pedido individual, no pisar toda la semana
+      // Evita race conditions cuando un push llega después del sync
+      mapped.forEach(remote => {
+        const local = PEDIDOS.find(p => p.id === remote.id && p.weekKey === weekKey);
+        if (local) {
+          local.pago = remote.pago;
+          local.entregado = remote.entregado;
+          local.notaCobro = remote.notaCobro;
+        } else {
+          PEDIDOS.push(remote);
+        }
+      });
       lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
     }
   } catch(e) { console.error('Pedidos sync error:', e); }
