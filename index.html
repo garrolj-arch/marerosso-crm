@@ -3496,16 +3496,17 @@ function guardarEntregaRapida() {
   });
   saveInventario_data();
   
-  // Add to CRM if checked
+  // Add to CRM if checked — save cliente directly without triggering full guardarTodo
   if (addCRM) {
-    CLIENTES.push({ id: NID++, nombre, tel, zona, notas, seg: 'domicilio', ruta: dia, fmt, estado: 'activo', freq: 'semanal' });
-    saveState();
+    const newCliente = { id: NID++, nombre, tel, zona, notas, seg: 'domicilio', ruta: dia, fmt, estado: 'activo', freq: 'semanal' };
+    CLIENTES.push(newCliente);
+    saveState(); // solo guarda CLIENTES en localStorage
+    saveClienteSheets(newCliente).catch(()=>{}); // push a Supabase sin bloquear
   }
   
   // Finanzas registra cuando se marca cobrado en togglePago — no aquí
   savePedidos();
   pushPedidoSheets(erPedido);
-  guardarTodo();
   closeModal('modal-entrega-rapida');
   renderRuta();
   renderCobros();
@@ -4446,6 +4447,7 @@ function renderRuta() {
 }
 
 function toggleEntregado(clienteId, weekKey) {
+  clienteId = Number(clienteId); // Fix mobile: onclick passes string, need number
   const p = PEDIDOS.find(x => x.id === clienteId && x.weekKey === weekKey);
   if (!p) return;
   p.entregado = !p.entregado;
