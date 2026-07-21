@@ -1339,9 +1339,17 @@ async function syncMovimientosFromSupabase() {
 
 // ── PEDIDOS ──────────────────────────────────────
 function loadPedidos() {
-  // No cargar pedidos del localStorage — siempre se jalan de Supabase en syncAll
-  // Esto garantiza que compu y celular siempre ven los mismos datos
-  return [];
+  try {
+    const saved = lsGet('mr_pedidos');
+    if (!saved) return [];
+    const all = JSON.parse(saved);
+    // Solo cargar las últimas 8 semanas del localStorage como cache inicial
+    // El syncAll siempre actualiza estados desde Supabase encima de esto
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 56); // 8 semanas
+    const cutoffStr = cutoff.toISOString().split('T')[0].substring(0, 7);
+    return all.filter(p => p.weekKey && p.weekKey.substring(0, 7) >= cutoffStr);
+  } catch(e) { return []; }
 }
 
 async function syncPedidosFromSheets(weekKey) {
@@ -4950,9 +4958,19 @@ async function syncAll() {
     const wkAuto = getWeekDates(0);
     const pedsSemana = PEDIDOS.filter(p => p.weekKey === wkAuto.key && !p.esVentaRapida && !p.esEntregaRapida);
     if (pedsSemana.length === 0 && CLIENTES.filter(c => c.estado === 'activo').length > 0) {
-      console.log('Auto-generando semana', wkAuto.key, '— no había pedidos');
-      await genWeek(true); // skipConfirm — generación automática sin diálogo
+      // Primero intentar jalar de Supabase — puede que ya existan pero no estén en localStorage
+      await syncPedidosFromSheets(wkAuto.key);
+      const pedsSupabase = PEDIDOS.filter(p => p.weekKey === wkAuto.key && !p.esVentaRapida && !p.esEntregaRapida);
+      if (pedsSupabase.length === 0) {
+        // Si tampoco hay en Supabase, entonces sí generar
+        console.log('Auto-generando semana', wkAuto.key, '— no había pedidos');
+        await genWeek(true);
+      } else {
+        console.log('Pedidos jalados de Supabase:', pedsSupabase.length);
+      }
     }
+    // Siempre actualizar estados de pago de todas las semanas
+    await syncAllPendingPedidos();
     renderDashboard();
     renderClientes();
     renderRuta();
