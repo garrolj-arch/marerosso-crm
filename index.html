@@ -1394,17 +1394,35 @@ async function syncPedidosFromSheets(weekKey) {
 }
 
 async function syncAllPendingPedidos() {
-  // Jala el estado de pago de TODOS los pedidos de Supabase en una sola query liviana
-  // Así el celular siempre ve cobros actualizados sin importar de qué semana son
+  // Jala TODOS los pedidos pendientes de Supabase — incluyendo semanas viejas
+  // Si no están en memoria local, los agrega para que aparezcan en Cobros
   try {
-    const data = await sbGet('pedidos', `select=id,week_key,pago,entregado,nota_cobro`);
+    const data = await sbGet('pedidos', `pago=eq.pendiente&entregado=eq.true&select=id,week_key,pago,entregado,nota_cobro,nombre,ruta,fmt,seg,auto_key,es_entrega_rapida`);
     if (!Array.isArray(data) || data.length === 0) return;
     data.forEach(remote => {
       const local = PEDIDOS.find(p => p.id === Number(remote.id) && p.weekKey === remote.week_key);
       if (local) {
+        // Actualizar estado
         local.pago = remote.pago || 'pendiente';
         local.entregado = remote.entregado || false;
         local.notaCobro = remote.nota_cobro || '';
+      } else {
+        // No está en memoria — agregarlo para que aparezca en Cobros
+        PEDIDOS.push({
+          id: Number(remote.id),
+          weekKey: remote.week_key,
+          weekLabel: remote.week_key,
+          nombre: remote.nombre || '',
+          ruta: remote.ruta || '',
+          fmt: Array.isArray(remote.fmt) ? remote.fmt : JSON.parse(remote.fmt || '[]'),
+          seg: remote.seg || 'domicilio',
+          pago: remote.pago || 'pendiente',
+          entregado: remote.entregado || false,
+          notaCobro: remote.nota_cobro || '',
+          autoKey: remote.auto_key || '',
+          esEntregaRapida: remote.es_entrega_rapida || false,
+          esVentaRapida: (remote.auto_key||'').startsWith('vr_')
+        });
       }
     });
     lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
