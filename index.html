@@ -1339,21 +1339,9 @@ async function syncMovimientosFromSupabase() {
 
 // ── PEDIDOS ──────────────────────────────────────
 function loadPedidos() {
-  try {
-    const saved = lsGet('mr_pedidos');
-    if (!saved) return [];
-    const all = JSON.parse(saved);
-    // Solo cargar en memoria las últimas 4 semanas desde localStorage
-    // Semanas más viejas se jalan de Supabase cuando se necesitan (al ir a Cobros)
-    // Esto evita que el celular tenga datos viejos desactualizados en cache
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - 28); // 4 semanas atrás
-    const cutoffKey = cutoff.toISOString().split('T')[0].substring(0,7); // YYYY-MM
-    return all.filter(p => {
-      if (!p.weekKey) return false;
-      return p.weekKey >= cutoffKey;
-    });
-  } catch(e) { return []; }
+  // No cargar pedidos del localStorage — siempre se jalan de Supabase en syncAll
+  // Esto garantiza que compu y celular siempre ven los mismos datos
+  return [];
 }
 
 async function syncPedidosFromSheets(weekKey) {
