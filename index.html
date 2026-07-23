@@ -3111,7 +3111,7 @@ function buildChartSemanas(data) {
     return `<circle cx="${p.x}" cy="${p.y}" r="${isAth?7:4}" 
       fill="${isAth?'#2D6A4F':'#8B1A1A'}" stroke="white" stroke-width="2"
       class="stat-dot">
-      <title>${semanas[i]}: ₡${Math.round(vals[i]/1000)}k${isAth?' 🏆 All-time high':''}</title>
+      <title>${semanas[i]}: ${Math.round(vals[i]/1000)}k${isAth?' ATH':''}</title>
     </circle>`;
   }).join('');
 
@@ -3122,7 +3122,7 @@ function buildChartSemanas(data) {
       <text x="${p.x}" y="${H-PAD+14}" text-anchor="middle" font-size="9" fill="var(--text3)">${s.substring(5)}</text>
       <text x="${p.x}" y="${p.y-10}" text-anchor="middle" font-size="9" 
         fill="${isAth?'#2D6A4F':'var(--text3)'}" font-weight="${isAth?'700':'400'}">
-        ₡${Math.round(vals[i]/1000)}k${isAth?' 🏆':''}
+        ${Math.round(vals[i]/1000)}k${isAth?' ATH':''}
       </text>`;
   }).join('');
 
@@ -3156,6 +3156,7 @@ function buildChartSemanas(data) {
       <div><span style="display:inline-block;width:20px;height:2px;background:#8B1A1A;vertical-align:middle;margin-right:4px"></span>Ventas semanales</div>
       <div><span style="display:inline-block;width:10px;height:10px;background:#2D6A4F;border-radius:50%;vertical-align:middle;margin-right:4px"></span>All-time high</div>
     </div>`;
+}
 
 function buildChartMeses(data) {
   const el = document.getElementById('chart-meses'); if(!el) return;
@@ -3364,7 +3365,7 @@ function buildChartCxC() {
         const v = bySem[s].vendido, c = bySem[s].cobrado;
         const hv = Math.max(4, Math.round(v/maxVal*90));
         const hc = Math.max(0, Math.round(c/maxVal*90));
-        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:1px" title="${s}&#10;Vendido: ₡${Math.round(v/1000)}k&#10;Cobrado: ₡${Math.round(c/1000)}k">
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:1px" title="${s} | Vendido: ${Math.round(v/1000)}k | Cobrado: ${Math.round(c/1000)}k">
           <div style="width:100%;display:flex;gap:1px;align-items:flex-end;height:90px">
             <div style="flex:1;height:${hv}px;background:#E8A87C;border-radius:2px 2px 0 0"></div>
             <div style="flex:1;height:${hc}px;background:var(--green);border-radius:2px 2px 0 0"></div>
