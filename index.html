@@ -3082,17 +3082,69 @@ function buildChartSemanas(data) {
   const semanas = Object.keys(bySem).sort().slice(-16);
   const vals = semanas.map(s=>bySem[s]);
   const maxVal = Math.max(...vals)||1;
-  const w = 100/semanas.length;
-  el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:2px;height:120px;padding:0 4px">` +
-    semanas.map((s,i) => {
-      const h = Math.max(4, Math.round(vals[i]/maxVal*110));
-      const lbl = s.substring(5); // MM-DD
-      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="${s}: ₡${Math.round(vals[i]/1000)}k">
-        <div style="font-size:9px;color:var(--text3)">₡${Math.round(vals[i]/1000)}k</div>
-        <div style="width:100%;height:${h}px;background:var(--primary);border-radius:3px 3px 0 0;opacity:${0.5+0.5*(vals[i]/maxVal)}"></div>
-        <div style="font-size:9px;color:var(--text3);writing-mode:vertical-rl;transform:rotate(180deg)">${lbl}</div>
-      </div>`;
-    }).join('') + `</div>`;
+  const athIdx = vals.indexOf(maxVal);
+
+  // SVG line chart
+  const W = 800, H = 160, PAD = 40;
+  const xStep = (W - PAD*2) / (semanas.length - 1 || 1);
+  const pts = vals.map((v,i) => ({
+    x: PAD + i * xStep,
+    y: PAD + (1 - v/maxVal) * (H - PAD*2)
+  }));
+
+  const linePath = pts.map((p,i)=>(i===0?`M${p.x},${p.y}`:`L${p.x},${p.y}`)).join(' ');
+  const areaPath = `${linePath} L${pts[pts.length-1].x},${H-PAD} L${pts[0].x},${H-PAD} Z`;
+
+  const circles = pts.map((p,i) => {
+    const isAth = i === athIdx;
+    return `<circle cx="${p.x}" cy="${p.y}" r="${isAth?7:4}" 
+      fill="${isAth?'#2D6A4F':'#8B1A1A'}" stroke="white" stroke-width="2"
+      class="stat-dot">
+      <title>${semanas[i]}: ${Math.round(vals[i]/1000)}k${isAth?' ATH':''}</title>
+    </circle>`;
+  }).join('');
+
+  const labels = semanas.map((s,i) => {
+    const p = pts[i];
+    const isAth = i === athIdx;
+    return `
+      <text x="${p.x}" y="${H-PAD+14}" text-anchor="middle" font-size="9" fill="var(--text3)">${s.substring(5)}</text>
+      <text x="${p.x}" y="${p.y-10}" text-anchor="middle" font-size="9" 
+        fill="${isAth?'#2D6A4F':'var(--text3)'}" font-weight="${isAth?'700':'400'}">
+        ${Math.round(vals[i]/1000)}k${isAth?' ATH':''}
+      </text>`;
+  }).join('');
+
+  el.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;overflow:visible">
+      <defs>
+        <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#8B1A1A" stop-opacity="0.15"/>
+          <stop offset="100%" stop-color="#8B1A1A" stop-opacity="0.02"/>
+        </linearGradient>
+      </defs>
+      <!-- Grid lines -->
+      ${[0.25,0.5,0.75,1].map(f=>`
+        <line x1="${PAD}" y1="${PAD+(1-f)*(H-PAD*2)}" x2="${W-PAD}" y2="${PAD+(1-f)*(H-PAD*2)}" 
+          stroke="var(--border)" stroke-width="1" stroke-dasharray="4,4"/>
+        <text x="${PAD-4}" y="${PAD+(1-f)*(H-PAD*2)+4}" text-anchor="end" font-size="9" fill="var(--text3)">
+          ₡${Math.round(maxVal*f/1000)}k
+        </text>`).join('')}
+      <!-- Area fill -->
+      <path d="${areaPath}" fill="url(#areaGrad)"/>
+      <!-- Line -->
+      <path d="${linePath}" fill="none" stroke="#8B1A1A" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+      <!-- ATH vertical line -->
+      <line x1="${pts[athIdx].x}" y1="${PAD}" x2="${pts[athIdx].x}" y2="${H-PAD}" 
+        stroke="#2D6A4F" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>
+      <!-- Labels & dots -->
+      ${labels}
+      ${circles}
+    </svg>
+    <div style="display:flex;gap:16px;font-size:11px;margin-top:4px;justify-content:center">
+      <div><span style="display:inline-block;width:20px;height:2px;background:#8B1A1A;vertical-align:middle;margin-right:4px"></span>Ventas semanales</div>
+      <div><span style="display:inline-block;width:10px;height:10px;background:#2D6A4F;border-radius:50%;vertical-align:middle;margin-right:4px"></span>All-time high</div>
+    </div>`;
 }
 
 function buildChartMeses(data) {
@@ -3302,7 +3354,7 @@ function buildChartCxC() {
         const v = bySem[s].vendido, c = bySem[s].cobrado;
         const hv = Math.max(4, Math.round(v/maxVal*90));
         const hc = Math.max(0, Math.round(c/maxVal*90));
-        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:1px" title="${s}&#10;Vendido: ₡${Math.round(v/1000)}k&#10;Cobrado: ₡${Math.round(c/1000)}k">
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:1px" title="${s} | Vendido: ${Math.round(v/1000)}k | Cobrado: ${Math.round(c/1000)}k">
           <div style="width:100%;display:flex;gap:1px;align-items:flex-end;height:90px">
             <div style="flex:1;height:${hv}px;background:#E8A87C;border-radius:2px 2px 0 0"></div>
             <div style="flex:1;height:${hc}px;background:var(--green);border-radius:2px 2px 0 0"></div>
