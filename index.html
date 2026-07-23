@@ -3000,22 +3000,29 @@ async function loadEstadisticasFromSupabase() {
   if (content) content.style.opacity = '0.4';
 
   try {
-    // Jalar todos los pedidos pagados de Supabase
-    const pagados = await sbGet('pedidos', `pago=eq.pagado&select=id,week_key,nombre,ruta,fmt,seg,pago`);
-    // También usar los que están en memoria
-    const allPagados = [...(pagados||[]).map(p=>({
+    // Jalar TODOS los pedidos entregados de Supabase — ventas reales independiente del cobro
+    const entregados = await sbGet('pedidos', `entregado=eq.true&select=id,week_key,nombre,ruta,fmt,seg,pago`);
+    
+    // Mapear a formato interno
+    const allEntregados = [...(entregados||[]).map(p=>({
       id: Number(p.id), weekKey: p.week_key, nombre: p.nombre,
       ruta: p.ruta||'', fmt: Array.isArray(p.fmt)?p.fmt:JSON.parse(p.fmt||'[]'),
-      seg: p.seg||'domicilio', pago: 'pagado'
+      seg: p.seg||'domicilio', pago: p.pago||'pendiente'
     }))];
 
-    // Complementar con pedidos pagados en memoria que no estén en Supabase
-    PEDIDOS.filter(p=>p.pago==='pagado').forEach(p => {
-      if (!allPagados.find(x=>x.id===p.id && x.weekKey===p.weekKey)) allPagados.push(p);
+    // Complementar con entregados en memoria que no estén en Supabase
+    PEDIDOS.filter(p=>p.entregado).forEach(p => {
+      if (!allEntregados.find(x=>x.id===p.id && x.weekKey===p.weekKey)) allEntregados.push(p);
+    });
+
+    // Deduplicar
+    const seen = new Set();
+    const dedup = allEntregados.filter(p => {
+      const k = `${p.id}_${p.weekKey}`; if(seen.has(k)) return false; seen.add(k); return true;
     });
 
     // Calcular monto de cada pedido
-    const conMonto = allPagados.map(p => ({
+    const conMonto = dedup.map(p => ({
       ...p,
       monto: p.fmt ? p.fmt.reduce((a,f)=>a+f.q*(f.p||(f.u===15?3000:5000)),0) : 0,
       mes: p.weekKey ? p.weekKey.substring(0,7) : '',
@@ -3036,7 +3043,7 @@ async function loadEstadisticasFromSupabase() {
     const sub = document.getElementById('stats-subtitle');
     if (sub && conMonto.length > 0) {
       const meses = [...new Set(conMonto.map(p=>p.mes))].sort();
-      sub.textContent = `Dashboard Mare Rosso · ${meses[0]} → ${meses[meses.length-1]} · ${conMonto.length} pedidos cobrados`;
+      sub.textContent = `Dashboard Mare Rosso · ${meses[0]} → ${meses[meses.length-1]} · ${conMonto.length} pedidos entregados`;
     }
   } catch(e) { console.warn('Stats error:', e); }
 
@@ -3047,29 +3054,30 @@ async function loadEstadisticasFromSupabase() {
 function buildStatsMetrics(data) {
   const el = document.getElementById('stats-metrics'); if(!el) return;
   const act = CLIENTES.filter(c=>c.estado==='activo');
-  const totalIng = data.reduce((a,p)=>a+p.monto,0);
+  const totalVentas = data.reduce((a,p)=>a+p.monto,0);
+  const totalCobrado = data.filter(p=>p.pago==='pagado').reduce((a,p)=>a+p.monto,0);
   const semActual = getWeekDates(0).key;
-  const ingSemActual = data.filter(p=>p.weekKey===semActual).reduce((a,p)=>a+p.monto,0);
   const semPasada = getWeekDates(-1).key;
-  const ingSemPasada = data.filter(p=>p.weekKey===semPasada).reduce((a,p)=>a+p.monto,0);
-  const crecimiento = ingSemPasada > 0 ? Math.round((ingSemActual-ingSemPasada)/ingSemPasada*100) : 0;
-  const pendientes = PEDIDOS.filter(p=>p.pago==='pendiente'&&p.entregado).reduce((a,p)=>a+fmtMonto(p.fmt),0);
+  const ventasSemActual = data.filter(p=>p.weekKey===semActual).reduce((a,p)=>a+p.monto,0);
+  const ventasSemPasada = data.filter(p=>p.weekKey===semPasada).reduce((a,p)=>a+p.monto,0);
+  const crecimiento = ventasSemPasada > 0 ? Math.round((ventasSemActual-ventasSemPasada)/ventasSemPasada*100) : 0;
+  const pendientes = data.filter(p=>p.pago==='pendiente').reduce((a,p)=>a+p.monto,0);
 
   el.innerHTML = `
     <div class="metric-card accent">
-      <div class="label">Ingresos totales cobrados</div>
-      <div class="value">₡${(totalIng/1000000).toFixed(1)}M</div>
-      <div class="sub">${data.length} pedidos</div>
+      <div class="label">Ventas totales entregadas</div>
+      <div class="value">₡${(totalVentas/1000000).toFixed(1)}M</div>
+      <div class="sub">₡${Math.round(totalCobrado/1000)}k cobrado · ${Math.round(totalCobrado/totalVentas*100||0)}%</div>
     </div>
     <div class="metric-card">
-      <div class="label">Esta semana</div>
-      <div class="value" style="color:var(--primary)">₡${Math.round(ingSemActual/1000)}k</div>
+      <div class="label">Ventas esta semana</div>
+      <div class="value" style="color:var(--primary)">₡${Math.round(ventasSemActual/1000)}k</div>
       <div class="sub" style="color:${crecimiento>=0?'var(--green)':'#DC2626'}">${crecimiento>=0?'↑':'↓'} ${Math.abs(crecimiento)}% vs semana pasada</div>
     </div>
     <div class="metric-card">
-      <div class="label">Por cobrar</div>
+      <div class="label">Por cobrar (CxC)</div>
       <div class="value" style="color:#92400E">₡${Math.round(pendientes/1000)}k</div>
-      <div class="sub">${PEDIDOS.filter(p=>p.pago==='pendiente'&&p.entregado).length} pedidos pendientes</div>
+      <div class="sub">${data.filter(p=>p.pago==='pendiente').length} pedidos entregados sin cobrar</div>
     </div>
     <div class="metric-card">
       <div class="label">Clientes activos</div>
