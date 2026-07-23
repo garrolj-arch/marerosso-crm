@@ -646,28 +646,57 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
   <div class="page-header">
     <div class="page-header-left">
       <h2>Estadísticas</h2>
-      <p>Crecimiento Mare Rosso — Mar 2025 a la fecha</p>
+      <p id="stats-subtitle">Dashboard Mare Rosso — datos en tiempo real</p>
     </div>
+    <button class="btn btn-primary" onclick="loadEstadisticasFromSupabase()" style="gap:6px">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+      Actualizar
+    </button>
   </div>
-  <div class="metrics-row" id="stats-metrics"></div>
-  <div class="charts-grid">
-    <div class="card">
-      <div class="card-title">Ingresos por mes (histórico)</div>
-      <div id="chart-hist" style="padding:8px 0"></div>
+  <div id="stats-loading" style="text-align:center;padding:40px;color:var(--text3);display:none">Cargando estadísticas...</div>
+  <div id="stats-content">
+    <div class="metrics-row" id="stats-metrics"></div>
+    <div class="charts-grid">
+      <div class="card" style="grid-column:span 2">
+        <div class="card-title">📈 Ingresos por semana</div>
+        <div id="chart-semanas" style="padding:8px 0"></div>
+      </div>
     </div>
-    <div class="card">
-      <div class="card-title">Distribución por segmento</div>
-      <div id="chart-seg" style="padding:8px 0"></div>
+    <div class="charts-grid">
+      <div class="card">
+        <div class="card-title">📅 Ingresos por mes</div>
+        <div id="chart-meses" style="padding:8px 0"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">🚚 Ventas por ruta</div>
+        <div id="chart-rutas2" style="padding:8px 0"></div>
+      </div>
     </div>
-  </div>
-  <div class="charts-grid">
-    <div class="card">
-      <div class="card-title">Top 10 clientes histórico</div>
-      <div id="chart-top2" style="padding:8px 0"></div>
+    <div class="charts-grid">
+      <div class="card">
+        <div class="card-title">🥚 Mix de productos</div>
+        <div id="chart-productos" style="padding:8px 0"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">🏆 Top 15 clientes</div>
+        <div id="chart-top-clientes" style="padding:8px 0"></div>
+      </div>
     </div>
-    <div class="card">
-      <div class="card-title">Clientes por ruta</div>
-      <div id="chart-rutas" style="padding:8px 0"></div>
+    <div class="charts-grid">
+      <div class="card" style="grid-column:span 2">
+        <div class="card-title">📊 Ventas vs Cobros — CxC Aging</div>
+        <div id="chart-cxc" style="padding:8px 0"></div>
+      </div>
+    </div>
+    <div class="charts-grid">
+      <div class="card">
+        <div class="card-title">💰 Estado de cobros</div>
+        <div id="chart-cobros" style="padding:8px 0"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">👥 Clientes B2B vs Dom</div>
+        <div id="chart-seg2" style="padding:8px 0"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -2960,23 +2989,335 @@ function buildChartRutas() {
 // ESTADÍSTICAS
 // ═══════════════════════════════════════════════
 function renderEstadisticas() {
+  // Trigger async load from Supabase
+  loadEstadisticasFromSupabase();
+}
+
+async function loadEstadisticasFromSupabase() {
+  const loading = document.getElementById('stats-loading');
+  const content = document.getElementById('stats-content');
+  if (loading) loading.style.display = 'block';
+  if (content) content.style.opacity = '0.4';
+
+  try {
+    // Jalar todos los pedidos pagados de Supabase
+    const pagados = await sbGet('pedidos', `pago=eq.pagado&select=id,week_key,nombre,ruta,fmt,seg,pago`);
+    // También usar los que están en memoria
+    const allPagados = [...(pagados||[]).map(p=>({
+      id: Number(p.id), weekKey: p.week_key, nombre: p.nombre,
+      ruta: p.ruta||'', fmt: Array.isArray(p.fmt)?p.fmt:JSON.parse(p.fmt||'[]'),
+      seg: p.seg||'domicilio', pago: 'pagado'
+    }))];
+
+    // Complementar con pedidos pagados en memoria que no estén en Supabase
+    PEDIDOS.filter(p=>p.pago==='pagado').forEach(p => {
+      if (!allPagados.find(x=>x.id===p.id && x.weekKey===p.weekKey)) allPagados.push(p);
+    });
+
+    // Calcular monto de cada pedido
+    const conMonto = allPagados.map(p => ({
+      ...p,
+      monto: p.fmt ? p.fmt.reduce((a,f)=>a+f.q*(f.p||(f.u===15?3000:5000)),0) : 0,
+      mes: p.weekKey ? p.weekKey.substring(0,7) : '',
+      semana: p.weekKey || ''
+    })).filter(p => p.monto > 0);
+
+    buildStatsMetrics(conMonto);
+    buildChartSemanas(conMonto);
+    buildChartMeses(conMonto);
+    buildChartRutas2(conMonto);
+    buildChartProductos(conMonto);
+    buildChartTopClientes(conMonto);
+    buildChartCobros();
+    buildChartCxC();
+    buildChartSeg2(conMonto);
+
+    // Update subtitle
+    const sub = document.getElementById('stats-subtitle');
+    if (sub && conMonto.length > 0) {
+      const meses = [...new Set(conMonto.map(p=>p.mes))].sort();
+      sub.textContent = `Dashboard Mare Rosso · ${meses[0]} → ${meses[meses.length-1]} · ${conMonto.length} pedidos cobrados`;
+    }
+  } catch(e) { console.warn('Stats error:', e); }
+
+  if (loading) loading.style.display = 'none';
+  if (content) content.style.opacity = '1';
+}
+
+function buildStatsMetrics(data) {
+  const el = document.getElementById('stats-metrics'); if(!el) return;
   const act = CLIENTES.filter(c=>c.estado==='activo');
-  const totalHist = Object.values(HISTORICAL).reduce((a,v)=>a+v,0);
-  const totalProfit = Object.values(PROFIT_HIST).reduce((a,v)=>a+v,0);
-  const totalCostos = Object.values(COSTOS_HIST).reduce((a,v)=>a+v,0);
-  const margen = totalHist - totalCostos;
+  const totalIng = data.reduce((a,p)=>a+p.monto,0);
+  const semActual = getWeekDates(0).key;
+  const ingSemActual = data.filter(p=>p.weekKey===semActual).reduce((a,p)=>a+p.monto,0);
+  const semPasada = getWeekDates(-1).key;
+  const ingSemPasada = data.filter(p=>p.weekKey===semPasada).reduce((a,p)=>a+p.monto,0);
+  const crecimiento = ingSemPasada > 0 ? Math.round((ingSemActual-ingSemPasada)/ingSemPasada*100) : 0;
+  const pendientes = PEDIDOS.filter(p=>p.pago==='pendiente'&&p.entregado).reduce((a,p)=>a+fmtMonto(p.fmt),0);
 
-  document.getElementById('stats-metrics').innerHTML = `
-    <div class="metric-card accent"><div class="label">Ingresos totales</div><div class="value">₡${Math.round(totalHist/1000000*10)/10}M</div><div class="sub">Ene 2025 – May 2026</div></div>
-    <div class="metric-card"><div class="label">Costos registrados</div><div class="value" style="color:#92400E">₡${Math.round(totalCostos/1000000*10)/10}M</div></div>
-    <div class="metric-card"><div class="label">Profit neto total</div><div class="value" style="color:var(--green)">₡${Math.round(Object.values(PROFIT_HIST).reduce((a,v)=>a+v,0)/1000000*10)/10}M</div><div class="sub">${Math.round(Object.values(PROFIT_HIST).reduce((a,v)=>a+v,0)/totalHist*100)}% margen</div></div>
-    <div class="metric-card"><div class="label">Clientes activos</div><div class="value">${act.length}</div><div class="sub">${act.filter(c=>c.seg==='b2b').length} B2B · ${act.filter(c=>c.seg==='domicilio').length} Dom</div></div>
-  `;
+  el.innerHTML = `
+    <div class="metric-card accent">
+      <div class="label">Ingresos totales cobrados</div>
+      <div class="value">₡${(totalIng/1000000).toFixed(1)}M</div>
+      <div class="sub">${data.length} pedidos</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Esta semana</div>
+      <div class="value" style="color:var(--primary)">₡${Math.round(ingSemActual/1000)}k</div>
+      <div class="sub" style="color:${crecimiento>=0?'var(--green)':'#DC2626'}">${crecimiento>=0?'↑':'↓'} ${Math.abs(crecimiento)}% vs semana pasada</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Por cobrar</div>
+      <div class="value" style="color:#92400E">₡${Math.round(pendientes/1000)}k</div>
+      <div class="sub">${PEDIDOS.filter(p=>p.pago==='pendiente'&&p.entregado).length} pedidos pendientes</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">Clientes activos</div>
+      <div class="value">${act.length}</div>
+      <div class="sub">${act.filter(c=>c.seg==='b2b').length} B2B · ${act.filter(c=>c.seg==='domicilio').length} Dom</div>
+    </div>`;
+}
 
-  buildChartHist();
-  buildChartSeg();
-  buildChartTop2();
-  buildChartRutas();
+function buildChartSemanas(data) {
+  const el = document.getElementById('chart-semanas'); if(!el) return;
+  const bySem = {};
+  data.forEach(p => { bySem[p.semana] = (bySem[p.semana]||0) + p.monto; });
+  const semanas = Object.keys(bySem).sort().slice(-16);
+  const vals = semanas.map(s=>bySem[s]);
+  const maxVal = Math.max(...vals)||1;
+  const w = 100/semanas.length;
+  el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:2px;height:120px;padding:0 4px">` +
+    semanas.map((s,i) => {
+      const h = Math.max(4, Math.round(vals[i]/maxVal*110));
+      const lbl = s.substring(5); // MM-DD
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="${s}: ₡${Math.round(vals[i]/1000)}k">
+        <div style="font-size:9px;color:var(--text3)">₡${Math.round(vals[i]/1000)}k</div>
+        <div style="width:100%;height:${h}px;background:var(--primary);border-radius:3px 3px 0 0;opacity:${0.5+0.5*(vals[i]/maxVal)}"></div>
+        <div style="font-size:9px;color:var(--text3);writing-mode:vertical-rl;transform:rotate(180deg)">${lbl}</div>
+      </div>`;
+    }).join('') + `</div>`;
+}
+
+function buildChartMeses(data) {
+  const el = document.getElementById('chart-meses'); if(!el) return;
+  const byMes = {};
+  data.forEach(p => { if(p.mes) byMes[p.mes] = (byMes[p.mes]||0) + p.monto; });
+  const meses = Object.keys(byMes).sort();
+  const vals = meses.map(m=>byMes[m]);
+  const maxVal = Math.max(...vals)||1;
+  const MNAMES = {'-01':'Ene','-02':'Feb','-03':'Mar','-04':'Abr','-05':'May','-06':'Jun','-07':'Jul','-08':'Ago','-09':'Sep','-10':'Oct','-11':'Nov','-12':'Dic'};
+  el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:4px;height:140px;padding:0 4px">` +
+    meses.map((m,i) => {
+      const h = Math.max(4, Math.round(vals[i]/maxVal*120));
+      const lbl = MNAMES[m.substring(4)] + ' ' + m.substring(2,4);
+      return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px" title="${m}: ₡${Math.round(vals[i]/1000)}k">
+        <div style="font-size:9px;color:var(--text3)">₡${Math.round(vals[i]/1000)}k</div>
+        <div style="width:100%;height:${h}px;background:#8B1A1A;border-radius:3px 3px 0 0"></div>
+        <div style="font-size:9px;color:var(--text3)">${lbl}</div>
+      </div>`;
+    }).join('') + `</div>`;
+}
+
+function buildChartRutas2(data) {
+  const el = document.getElementById('chart-rutas2'); if(!el) return;
+  const byRuta = {lunes:0,martes:0,miercoles:0};
+  data.forEach(p => { if(byRuta[p.ruta]!==undefined) byRuta[p.ruta]+=p.monto; });
+  const total = Object.values(byRuta).reduce((a,v)=>a+v,0)||1;
+  const colors = {lunes:'#8B1A1A',martes:'#C4673A',miercoles:'#E8A87C'};
+  const names = {lunes:'Lunes · Santa Ana',martes:'Martes · Este/Cartago',miercoles:'Miércoles · Heredia'};
+  el.innerHTML = Object.entries(byRuta).map(([r,v])=>`
+    <div style="margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+        <span>${names[r]}</span><span style="font-weight:600">₡${Math.round(v/1000)}k (${Math.round(v/total*100)}%)</span>
+      </div>
+      <div style="height:10px;background:var(--bg2);border-radius:5px;overflow:hidden">
+        <div style="height:100%;width:${Math.round(v/total*100)}%;background:${colors[r]};border-radius:5px"></div>
+      </div>
+    </div>`).join('');
+}
+
+function buildChartProductos(data) {
+  const el = document.getElementById('chart-productos'); if(!el) return;
+  let gsp=0, gcp=0, pcp=0;
+  data.forEach(p => {
+    (p.fmt||[]).forEach(f => {
+      if(f.u===15) pcp+=f.q;
+      else if(p.seg==='b2b') gsp+=f.q;
+      else gcp+=f.q;
+    });
+  });
+  const total = (gsp+gcp+pcp)||1;
+  el.innerHTML = [
+    ['G-SP (Grande Sin Plástico)', gsp, '#8B1A1A'],
+    ['G-CP (Grande Con Plástico)', gcp, '#1A4E8A'],
+    ['P-CP (Pequeño Con Plástico)', pcp, '#2D6A4F']
+  ].map(([name,val,color])=>`
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+        <span>${name}</span><span style="font-weight:600">${val} cartones (${Math.round(val/total*100)}%)</span>
+      </div>
+      <div style="height:12px;background:var(--bg2);border-radius:6px;overflow:hidden">
+        <div style="height:100%;width:${Math.round(val/total*100)}%;background:${color};border-radius:6px"></div>
+      </div>
+    </div>`).join('');
+}
+
+function buildChartTopClientes(data) {
+  const el = document.getElementById('chart-top-clientes'); if(!el) return;
+  const byCliente = {};
+  data.forEach(p => { byCliente[p.nombre] = (byCliente[p.nombre]||0) + p.monto; });
+  const top = Object.entries(byCliente).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  const maxVal = top[0]?.[1]||1;
+  el.innerHTML = top.map(([n,v],i)=>`
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <div style="font-size:11px;color:var(--text3);width:16px;text-align:right">${i+1}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:11px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n}</div>
+        <div style="height:6px;background:var(--bg2);border-radius:3px;margin-top:2px;overflow:hidden">
+          <div style="height:100%;width:${Math.round(v/maxVal*100)}%;background:#1A4E8A;border-radius:3px"></div>
+        </div>
+      </div>
+      <div style="font-size:11px;font-weight:600;color:var(--primary);white-space:nowrap">₡${Math.round(v/1000)}k</div>
+    </div>`).join('');
+}
+
+function buildChartCobros() {
+  const el = document.getElementById('chart-cobros'); if(!el) return;
+  const cobrado = PEDIDOS.filter(p=>p.pago==='pagado').reduce((a,p)=>a+fmtMonto(p.fmt),0);
+  const pendiente = PEDIDOS.filter(p=>p.pago==='pendiente'&&p.entregado).reduce((a,p)=>a+fmtMonto(p.fmt),0);
+  const total = (cobrado+pendiente)||1;
+  const pct = Math.round(cobrado/total*100);
+  el.innerHTML = `
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="font-size:32px;font-weight:700;color:var(--green)">${pct}%</div>
+      <div style="font-size:13px;color:var(--text3)">cobrado esta semana</div>
+    </div>
+    <div style="height:16px;background:var(--bg2);border-radius:8px;overflow:hidden;margin-bottom:12px">
+      <div style="height:100%;width:${pct}%;background:var(--green);border-radius:8px;transition:width .5s"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:12px">
+      <div><span style="color:var(--green);font-weight:600">₡${Math.round(cobrado/1000)}k</span> cobrado</div>
+      <div><span style="color:#92400E;font-weight:600">₡${Math.round(pendiente/1000)}k</span> pendiente</div>
+    </div>`;
+}
+
+function buildChartSeg2(data) {
+  const el = document.getElementById('chart-seg2'); if(!el) return;
+  const domIng = data.filter(p=>p.seg==='domicilio').reduce((a,p)=>a+p.monto,0);
+  const b2bIng = data.filter(p=>p.seg==='b2b').reduce((a,p)=>a+p.monto,0);
+  const total = (domIng+b2bIng)||1;
+  const domPct = Math.round(domIng/total*100);
+  const b2bPct = 100-domPct;
+  const act = CLIENTES.filter(c=>c.estado==='activo');
+  el.innerHTML = `
+    <div style="display:flex;height:20px;border-radius:10px;overflow:hidden;margin-bottom:12px">
+      <div style="width:${domPct}%;background:#8B1A1A;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:600">${domPct}%</div>
+      <div style="width:${b2bPct}%;background:#1A4E8A;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:600">${b2bPct}%</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div style="background:var(--bg2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">🏠 Domicilio</div>
+        <div style="font-size:18px;font-weight:700;color:#8B1A1A">₡${Math.round(domIng/1000)}k</div>
+        <div style="font-size:11px;color:var(--text3)">${act.filter(c=>c.seg==='domicilio').length} clientes</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">🏢 B2B</div>
+        <div style="font-size:18px;font-weight:700;color:#1A4E8A">₡${Math.round(b2bIng/1000)}k</div>
+        <div style="font-size:11px;color:var(--text3)">${act.filter(c=>c.seg==='b2b').length} clientes</div>
+      </div>
+    </div>`;
+}
+
+function buildChartCxC() {
+  const el = document.getElementById('chart-cxc'); if(!el) return;
+
+  // Agrupar por semana: ventas (entregado) vs cobrado
+  const bySem = {};
+  PEDIDOS.filter(p => p.entregado && p.weekKey).forEach(p => {
+    const wk = p.weekKey;
+    if (!bySem[wk]) bySem[wk] = { vendido: 0, cobrado: 0 };
+    const monto = fmtMonto(p.fmt);
+    bySem[wk].vendido += monto;
+    if (p.pago === 'pagado') bySem[wk].cobrado += monto;
+  });
+
+  const semanas = Object.keys(bySem).sort().slice(-12);
+  if (!semanas.length) { el.innerHTML = '<p style="color:var(--text3);font-size:13px;padding:8px">Sin datos de entregas aún.</p>'; return; }
+
+  // Totales globales
+  const totalVendido = Object.values(bySem).reduce((a,v)=>a+v.vendido,0);
+  const totalCobrado = Object.values(bySem).reduce((a,v)=>a+v.cobrado,0);
+  const totalCxC = totalVendido - totalCobrado;
+  const pctCobrado = totalVendido > 0 ? Math.round(totalCobrado/totalVendido*100) : 0;
+
+  // Aging: agrupar CxC por antigüedad
+  const hoy = new Date();
+  const aging = { '0-7d': 0, '8-30d': 0, '30+d': 0 };
+  PEDIDOS.filter(p => p.entregado && p.pago === 'pendiente' && p.weekKey).forEach(p => {
+    const sem = new Date(p.weekKey);
+    const dias = Math.round((hoy - sem) / (1000*60*60*24));
+    const monto = fmtMonto(p.fmt);
+    if (dias <= 7) aging['0-7d'] += monto;
+    else if (dias <= 30) aging['8-30d'] += monto;
+    else aging['30+d'] += monto;
+  });
+
+  const maxVal = Math.max(...semanas.map(s=>bySem[s].vendido))||1;
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:20px">
+      <div style="background:var(--bg2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">📦 Total vendido</div>
+        <div style="font-size:18px;font-weight:700;color:var(--primary)">₡${Math.round(totalVendido/1000)}k</div>
+        <div style="font-size:11px;color:var(--text3)">entregado</div>
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:11px;color:var(--text3);margin-bottom:4px">✅ Cobrado</div>
+        <div style="font-size:18px;font-weight:700;color:var(--green)">₡${Math.round(totalCobrado/1000)}k</div>
+        <div style="font-size:11px;color:var(--text3)">${pctCobrado}% del vendido</div>
+      </div>
+      <div style="background:#FEF3C7;border-radius:8px;padding:12px;text-align:center">
+        <div style="font-size:11px;color:#92400E;margin-bottom:4px">⏳ Por cobrar (CxC)</div>
+        <div style="font-size:18px;font-weight:700;color:#92400E">₡${Math.round(totalCxC/1000)}k</div>
+        <div style="font-size:11px;color:#92400E">${100-pctCobrado}% pendiente</div>
+      </div>
+    </div>
+    <div style="margin-bottom:16px">
+      <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">Aging de CxC</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div style="background:#EAF3DE;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:11px;color:#2D6A4F;margin-bottom:2px">0-7 días</div>
+          <div style="font-size:16px;font-weight:700;color:#2D6A4F">₡${Math.round(aging['0-7d']/1000)}k</div>
+        </div>
+        <div style="background:#FEF3C7;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:11px;color:#92400E;margin-bottom:2px">8-30 días</div>
+          <div style="font-size:16px;font-weight:700;color:#92400E">₡${Math.round(aging['8-30d']/1000)}k</div>
+        </div>
+        <div style="background:#FEE2E2;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:11px;color:#991B1B;margin-bottom:2px">30+ días</div>
+          <div style="font-size:16px;font-weight:700;color:#991B1B">₡${Math.round(aging['30+d']/1000)}k</div>
+        </div>
+      </div>
+    </div>
+    <div style="font-size:12px;font-weight:600;color:var(--text2);margin-bottom:8px">Ventas vs Cobros por semana</div>
+    <div style="display:flex;align-items:flex-end;gap:3px;height:100px">
+      ${semanas.map(s => {
+        const v = bySem[s].vendido, c = bySem[s].cobrado;
+        const hv = Math.max(4, Math.round(v/maxVal*90));
+        const hc = Math.max(0, Math.round(c/maxVal*90));
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:1px" title="${s}&#10;Vendido: ₡${Math.round(v/1000)}k&#10;Cobrado: ₡${Math.round(c/1000)}k">
+          <div style="width:100%;display:flex;gap:1px;align-items:flex-end;height:90px">
+            <div style="flex:1;height:${hv}px;background:#E8A87C;border-radius:2px 2px 0 0"></div>
+            <div style="flex:1;height:${hc}px;background:var(--green);border-radius:2px 2px 0 0"></div>
+          </div>
+          <div style="font-size:8px;color:var(--text3)">${s.substring(5)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:16px;font-size:11px;margin-top:8px">
+      <div><span style="display:inline-block;width:10px;height:10px;background:#E8A87C;border-radius:2px;margin-right:4px"></span>Vendido</div>
+      <div><span style="display:inline-block;width:10px;height:10px;background:var(--green);border-radius:2px;margin-right:4px"></span>Cobrado</div>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════
