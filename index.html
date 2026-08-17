@@ -5360,9 +5360,6 @@ async function syncAll() {
     // Jalar TODOS los pedidos pendientes de Supabase (cualquier semana)
     // para que cobros de semanas anteriores se vean igual en todos los dispositivos
     await syncAllPendingPedidos();
-    // Push local pedidos for current week to Supabase
-    const localPedidos = PEDIDOS.filter(p => p.weekKey === wkCurr.key || p.weekKey === wkNext.key);
-    if (localPedidos.length) await pushPedidosBulk(localPedidos);
     // Push confirmaciones
     await pushConfirmacionesSheets();
     // Sync inventario, movimientos y orden de ruta
