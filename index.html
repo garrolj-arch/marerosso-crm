@@ -1405,18 +1405,25 @@ async function syncPedidosFromSheets(weekKey) {
         vrKey: (p.auto_key||'').startsWith('vr_') ? p.auto_key : undefined,
         autoKey: p.auto_key || ''
       }));
-      // Merge inteligente: actualizar estado por pedido individual, no pisar toda la semana
-      // Evita race conditions cuando un push llega después del sync
-      mapped.forEach(remote => {
-        const local = PEDIDOS.find(p => p.id === remote.id && p.weekKey === weekKey);
-        if (local) {
-          local.pago = remote.pago;
-          local.entregado = remote.entregado;
-          local.notaCobro = remote.notaCobro;
-        } else {
-          PEDIDOS.push(remote);
-        }
-      });
+      // Si no hay pedidos locales para esta semana, reemplazar completamente
+      // Si hay pedidos locales, hacer merge inteligente para no pisar cambios recientes
+      const localExist = PEDIDOS.filter(p => p.weekKey === weekKey);
+      if (localExist.length === 0) {
+        // Celular sin datos: agregar todos directo
+        PEDIDOS = [...PEDIDOS, ...mapped];
+      } else {
+        // Merge inteligente: actualizar estado por pedido individual
+        mapped.forEach(remote => {
+          const local = PEDIDOS.find(p => p.id === remote.id && p.weekKey === weekKey);
+          if (local) {
+            local.pago = remote.pago;
+            local.entregado = remote.entregado;
+            local.notaCobro = remote.notaCobro;
+          } else {
+            PEDIDOS.push(remote);
+          }
+        });
+      }
       lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
     }
   } catch(e) { console.error('Pedidos sync error:', e); }
@@ -1922,6 +1929,9 @@ function renderPedidos() {
   const el = document.getElementById('pedidos-content');
 
   if(!semPedidos.length) {
+    // Si el sync aún está en progreso, mostrar loading en vez de "no hay pedidos"
+    const isSyncing = document.querySelector('.sync-indicator')?.textContent?.includes('Sincronizando') || 
+                      document.getElementById('sync-status')?.dataset?.syncing === 'true';
     el.innerHTML = `<div class="empty-state">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
       <p>No hay pedidos para esta semana</p>
