@@ -1384,6 +1384,10 @@ function loadPedidos() {
 async function syncPedidosFromSheets(weekKey) {
   try {
     const data = await sbGet('pedidos', `week_key=eq.${weekKey}`);
+    console.log('[MR] syncPedidosFromSheets', weekKey, '→ Supabase devolvió', Array.isArray(data) ? data.length : 'ERROR', 'filas');
+    if (Array.isArray(data) && data.length === 0) {
+      console.warn('[MR] Supabase no tiene pedidos para weekKey=' + weekKey + '. Si en la compu SÍ hay pedidos de esta semana, revisá si este dispositivo calculó otra weekKey (hora/zona horaria del celular) — getWeekDates(0).key ahora mismo =', getWeekDates(0).key);
+    }
     if (Array.isArray(data) && data.length > 0) {
       const mapped = data.map(p => ({
         id: Number(p.id),
@@ -1425,8 +1429,9 @@ async function syncPedidosFromSheets(weekKey) {
         });
       }
       lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
+      console.log('[MR] PEDIDOS total tras merge de', weekKey, ':', PEDIDOS.filter(p=>p.weekKey===weekKey).length, '(array completo:', PEDIDOS.length, ')');
     }
-  } catch(e) { console.error('Pedidos sync error:', e); }
+  } catch(e) { console.error('[MR] Pedidos sync error para weekKey=' + weekKey + ':', e); }
 }
 
 async function syncAllPendingPedidos() {
@@ -5470,30 +5475,30 @@ const _origSaveCliente = typeof saveCliente === 'function' ? saveCliente : null;
 
 // ── Auto-sync on load if URL is configured ───────
 window.addEventListener('load', () => {
+  console.log('[MR] window.load — device=', navigator.userAgent);
+  console.log('[MR] PEDIDOS en cache al arrancar:', PEDIDOS.length);
+
   // Clear old pedidos (before May 25, 2026) — fresh start
   const cutoff = '2026-05-25';
   PEDIDOS = PEDIDOS.filter(p => p.weekKey >= cutoff);
   lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
-  
-  // Auto-sync from Supabase on every load
+
+  // Auto-sync from Supabase on every load.
+  // IMPORTANT: usa la MISMA rutina que el botón "Sincronizar todo ahora"
+  // (syncAll) en vez de una versión resumida — la versión resumida que
+  // vivía acá no llamaba syncAllPendingPedidos() ni el fallback de
+  // auto-generar semana, y nunca habilitaba btn-gen-week. Eso dejaba el
+  // celular con PEDIDOS vacío en pantallas que sí dependen de PEDIDOS
+  // (Semana/Pedidos), aunque Hoja de Ruta seguía viéndose bien porque esa
+  // pantalla se arma con CLIENTES + CONFIRMACIONES, no con PEDIDOS.
   setTimeout(async () => {
-    showSync('syncing');
     try {
-      await syncClientesFromSheets();
-      await syncConfirmacionesFromSheets();
-      const wkCurr = getWeekDates(0);
-      const wkNext = getWeekDates(1);
-      await syncPedidosFromSheets(wkCurr.key);
-      await syncPedidosFromSheets(wkNext.key);
-      renderDashboard();
-      renderConfirmaciones();
-      renderRuta();
-      renderPedidos();
-      renderCobros();
-      showSync('ok');
+      await syncAll();
+      console.log('[MR] syncAll (load) OK — PEDIDOS ahora:', PEDIDOS.length,
+        'semana actual:', PEDIDOS.filter(p => p.weekKey === getWeekDates(0).key).length);
     } catch(e) {
       showSync('error', 'Sin conexión');
-      console.error('Load sync error:', e);
+      console.error('[MR] Load sync error:', e);
     }
   }, 400);
 });
