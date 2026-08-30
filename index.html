@@ -494,6 +494,7 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
       <button class="filter-btn" onclick="setPedRuta('lunes',this)">Lunes</button>
       <button class="filter-btn" onclick="setPedRuta('martes',this)">Martes</button>
       <button class="filter-btn" onclick="setPedRuta('miercoles',this)">Miércoles</button>
+      <button class="filter-btn" onclick="setPedRuta('pickup',this)">Pickup</button>
     </div>
   </div>
   <div id="pedidos-content"></div>
@@ -564,6 +565,7 @@ tbody td { padding: 11px 12px; vertical-align: middle; }
           <button class="filter-btn" onclick="setWARuta('lunes',this)">Lunes</button>
           <button class="filter-btn" onclick="setWARuta('martes',this)">Martes</button>
           <button class="filter-btn" onclick="setWARuta('miercoles',this)">Miércoles</button>
+          <button class="filter-btn" onclick="setWARuta('pickup',this)">Pickup</button>
         </div>
       </div>
     </div>
@@ -1727,13 +1729,30 @@ function setPedRuta(v, el) { fPedRuta=v; setFilter('fg-ped-ruta',v,el); renderPe
 
 async function genWeek(skipConfirm = false) {
   const wk = getWeekDates(currentWeekOffset);
-  const act = CLIENTES.filter(c=>c.estado==='activo'&&c.ruta!=='pickup');
+  // Incluye también a los clientes de ruta "pickup" (recogen en bodega / entrega fuera de ruta)
+  // para que entren en Confirmaciones y Hoja de Ruta como una ruta más.
+  const act = CLIENTES.filter(c=>c.estado==='activo');
   const existing = PEDIDOS.filter(p=>p.weekKey===wk.key);
   
   if(existing.length > 0) {
+    // TOP-UP: si hay clientes activos que todavía no están en la semana ya generada
+    // (cliente nuevo, o uno que se acaba de pasar a ruta "pickup"), agregarlos directo
+    // sin tocar ni regenerar los que ya existen — así no se pierde nada ya confirmado/pagado.
+    const existingIds = new Set(existing.map(p => p.id));
+    const faltantes = act.filter(c => !existingIds.has(c.id));
+    if (faltantes.length > 0) {
+      faltantes.forEach(c => {
+        PEDIDOS.push({...c, pago:'pendiente', weekKey:wk.key, weekLabel:wk.label, entregado:false});
+      });
+      savePedidos();
+      const nuevosPeds = PEDIDOS.filter(p => p.weekKey === wk.key && faltantes.some(f => f.id === p.id));
+      await pushPedidosBulk(nuevosPeds).catch(e => console.warn('genWeek top-up push error:', e));
+      renderPedidos();
+      if (!skipConfirm) alert('Se agregaron ' + faltantes.length + ' cliente(s) nuevo(s) a la semana ' + wk.label + '.');
+    }
     // Si es auto-generación (skipConfirm), NO regenerar si ya hay pedidos — solo salir
     if(skipConfirm) return;
-    if(!confirm('Ya hay pedidos para ' + wk.label + '. ¿Regenerar?')) return;
+    if(!confirm('¿Regenerar TODOS los pedidos de ' + wk.label + '? (esto no borra pagos/entregas ya marcados, pero recalcula todo desde Clientes)')) return;
     // Save payment status before removing
     const pagoMap = {};
     existing.forEach(p => { pagoMap[p.id] = p.pago; });
@@ -1929,7 +1948,7 @@ function renderPedidos() {
   const wk = getWeekDates(currentWeekOffset);
   document.getElementById('week-display').textContent = wk.label;
   const semPedidos = PEDIDOS.filter(p=>p.weekKey===wk.key);
-  const dias = ['lunes','martes','miercoles'];
+  const dias = ['lunes','martes','miercoles','pickup'];
   const show = fPedRuta==='todas' ? dias : [fPedRuta];
   const el = document.getElementById('pedidos-content');
 
@@ -3184,11 +3203,11 @@ function buildChartMeses(data) {
 
 function buildChartRutas2(data) {
   const el = document.getElementById('chart-rutas2'); if(!el) return;
-  const byRuta = {lunes:0,martes:0,miercoles:0};
+  const byRuta = {lunes:0,martes:0,miercoles:0,pickup:0};
   data.forEach(p => { if(byRuta[p.ruta]!==undefined) byRuta[p.ruta]+=p.monto; });
   const total = Object.values(byRuta).reduce((a,v)=>a+v,0)||1;
-  const colors = {lunes:'#8B1A1A',martes:'#C4673A',miercoles:'#E8A87C'};
-  const names = {lunes:'Lunes · Santa Ana',martes:'Martes · Este/Cartago',miercoles:'Miércoles · Heredia'};
+  const colors = {lunes:'#8B1A1A',martes:'#C4673A',miercoles:'#E8A87C',pickup:'#9C8878'};
+  const names = {lunes:'Lunes · Santa Ana',martes:'Martes · Este/Cartago',miercoles:'Miércoles · Heredia',pickup:'Pickup / Variable'};
   el.innerHTML = Object.entries(byRuta).map(([r,v])=>`
     <div style="margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
@@ -4214,7 +4233,7 @@ function renderConfirmaciones() {
 
   const DIAS_RUTA = [
     {key:'lunes',label:'Lun'},{key:'martes',label:'Mar'},{key:'miercoles',label:'Mié'},
-    {key:'jueves',label:'Jue'},{key:'viernes',label:'Vie'}
+    {key:'jueves',label:'Jue'},{key:'viernes',label:'Vie'},{key:'pickup',label:'Pickup'}
   ];
   const diasConClientes = DIAS_RUTA.filter(d => semPAll.some(p => p.ruta === d.key));
   const elProd = document.getElementById('conf-produccion');
@@ -4255,7 +4274,7 @@ function renderConfirmaciones() {
   `;
 
   // Per-client confirmation list grouped by ruta
-  const dias = ['lunes', 'martes', 'miercoles'];
+  const dias = ['lunes', 'martes', 'miercoles', 'pickup'];
   el.innerHTML = dias.map(dia => {
     const grupo = semP.filter(p => p.ruta === dia);
     if (!grupo.length) return '';
@@ -4603,12 +4622,13 @@ function renderRuta() {
 
   // Build the stops list directly from CLIENTES + CONFIRMACIONES
   // This works even if PEDIDOS is empty
-  const dias = ['lunes', 'martes', 'miercoles'];
-  const diaFull = { lunes: 'Lunes', martes: 'Martes', miercoles: 'Miércoles' };
-  
+  const dias = ['lunes', 'martes', 'miercoles', 'pickup'];
+  const diaFull = { lunes: 'Lunes', martes: 'Martes', miercoles: 'Miércoles', pickup: 'Pickup' };
+
   // Get confirmed clients for this week from CONFIRMACIONES
+  // (pickup/fuera de ruta cuenta como una "ruta" más, no se excluye)
   const confirmedClients = CLIENTES.filter(c => {
-    if (c.estado !== 'activo' || c.ruta === 'pickup') return false;
+    if (c.estado !== 'activo') return false;
     const conf = getConf(wk.key, c.id);
     return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
   });
@@ -4625,7 +4645,7 @@ function renderRuta() {
     const anyConf = Object.keys(CONFIRMACIONES).some(k => k.startsWith(wk.key + '_'));
     if (!anyConf) {
       // Auto-ensure pedidos exist
-      const act = CLIENTES.filter(c => c.estado === 'activo' && c.ruta !== 'pickup');
+      const act = CLIENTES.filter(c => c.estado === 'activo');
       if (act.length > 0 && !PEDIDOS.some(p => p.weekKey === wk.key)) {
         const seen = new Set();
         act.forEach(c => {
@@ -4640,7 +4660,7 @@ function renderRuta() {
     return;
   }
 
-  const RDOT = {lunes:'Lun',martes:'Mar',miercoles:'Mié'};
+  const RDOT = {lunes:'Lun',martes:'Mar',miercoles:'Mié',pickup:'Pick'};
 
   el.innerHTML = dias.map(dia => {
     // Confirmed clients for this dia
@@ -4680,7 +4700,7 @@ function renderRuta() {
       }
     });
     
-    const diaLabel = dia==='lunes'?'Santa Ana / Escazú / Lindora':dia==='martes'?'Este / Cartago':'Heredia / Alajuela';
+    const diaLabel = dia==='lunes'?'Santa Ana / Escazú / Lindora':dia==='martes'?'Este / Cartago':dia==='miercoles'?'Heredia / Alajuela':'Recoge en bodega / entrega fuera de ruta';
     const totalParadas = sorted.length + diaQuick.length;
     
     // Construir lista completa de paradas
@@ -4870,7 +4890,7 @@ function renderRuta() {
 
   // Init drag & drop for each day after DOM is ready
   setTimeout(() => {
-    ['lunes','martes','miercoles'].forEach(d => initDragDrop(d, wk.key));
+    ['lunes','martes','miercoles','pickup'].forEach(d => initDragDrop(d, wk.key));
   }, 50);
 }
 
@@ -5080,7 +5100,7 @@ function printRuta(dia, weekKey) {
   
   if (!allStops.length) { alert('No hay paradas confirmadas para este día.'); return; }
   
-  const diaLabel = dia==='lunes'?'Lunes — Santa Ana / Escazú / Lindora':dia==='martes'?'Martes — Este / Cartago':'Miércoles — Heredia / Alajuela';
+  const diaLabel = dia==='lunes'?'Lunes — Santa Ana / Escazú / Lindora':dia==='martes'?'Martes — Este / Cartago':dia==='miercoles'?'Miércoles — Heredia / Alajuela':'Pickup — Recoge en bodega / fuera de ruta';
   const typeColors = {gsp:{lbl:'G-SP',clr:'#8B3A1E'},gcp:{lbl:'G-CP',clr:'#1A4E8A'},pcp:{lbl:'P-CP',clr:'#2D6A4F'}};
   let totalMonto = 0, headerGSP=0, headerGCP=0, headerPCP=0;
   
