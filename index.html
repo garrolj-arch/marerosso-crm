@@ -1511,15 +1511,32 @@ async function pushPedidoSheets(pedido) {
 }
 
 async function pushPedidosBulk(pedidos) {
-  // Push one by one to avoid batch errors
+  if (!pedidos.length) { console.log('[MR] pushPedidosBulk: 0/0 (nada que subir)'); return; }
+  // Intento rápido: UN solo upsert con todas las filas juntas — mucho menos propenso a
+  // quedar a medias que mandarlas una por una, porque antes bastaba cerrar la pestaña o
+  // perder señal a mitad del loop (149 peticiones seguidas) para dejar Supabase con datos
+  // incompletos (esto ya pasó dos veces: el celular jala lo que Supabase realmente tiene).
+  try {
+    await sbUpsert('pedidos', pedidos.map(pedidoToRow));
+    console.log('[MR] pushPedidosBulk: ' + pedidos.length + '/' + pedidos.length + ' pushed (batch)');
+    return;
+  } catch (batchErr) {
+    console.warn('[MR] pushPedidosBulk: batch upsert falló, reintentando fila por fila:', batchErr.message);
+  }
+  // Fallback: uno por uno (por si una sola fila con dato raro tumba el batch completo)
   let ok = 0;
   for (const p of pedidos) {
-    try { 
-      await sbUpsert('pedidos', pedidoToRow(p)); 
+    try {
+      await sbUpsert('pedidos', pedidoToRow(p));
       ok++;
-    } catch(e) { console.warn('pushPedido error id=' + p.id, e.message); }
+    } catch(e) { console.warn('[MR] pushPedido error id=' + p.id, e.message); }
   }
-  console.log('pushPedidosBulk: ' + ok + '/' + pedidos.length + ' pushed');
+  console.log('[MR] pushPedidosBulk: ' + ok + '/' + pedidos.length + ' pushed (uno por uno)');
+  if (ok < pedidos.length) {
+    alert('⚠️ Atención: solo se subieron ' + ok + ' de ' + pedidos.length + ' pedidos a Supabase.\n\n' +
+      'NO cierres esta pestaña todavía — quedate en el CRM unos segundos y volvé a intentar ' +
+      '"Generar semana" o Sincronizar, porque si cerrás ahora el celular no va a ver los pedidos que faltan.');
+  }
 }
 
 async function savePedidoSheets(pedido) {
