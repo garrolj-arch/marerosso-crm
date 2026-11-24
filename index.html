@@ -1308,23 +1308,36 @@ function saveState() {
   lsSet('mr_clientes', JSON.stringify(CLIENTES));
 }
 
+// Fila completa de un cliente para mandar a Supabase. Se usa tanto para guardar
+// un cliente individual como para el batch upsert del reorden de ruta — [MR]
+// 24-nov: un upsert con SOLO {id, orden_<dia>} puede no matchear el conflicto y
+// Supabase intenta un INSERT en vez de UPDATE, lo cual falla por columnas NOT
+// NULL faltantes (nombre, ruta, etc.). Por eso SIEMPRE se manda la fila completa.
+function clienteRowForSupabase(cliente) {
+  return {
+    id: cliente.id,
+    nombre: cliente.nombre,
+    tel: cliente.tel || '',
+    seg: cliente.seg || 'domicilio',
+    ruta: cliente.ruta || 'lunes',
+    zona: cliente.zona || '',
+    notas: cliente.notas || '',
+    fmt: cliente.fmt,
+    estado: cliente.estado || 'activo',
+    freq: cliente.freq || 'semanal',
+    lat: cliente.lat || null,
+    lng: cliente.lng || null,
+    orden_lunes: cliente.orden_lunes !== undefined ? cliente.orden_lunes : null,
+    orden_martes: cliente.orden_martes !== undefined ? cliente.orden_martes : null,
+    orden_miercoles: cliente.orden_miercoles !== undefined ? cliente.orden_miercoles : null,
+    orden_pickup: cliente.orden_pickup !== undefined ? cliente.orden_pickup : null
+  };
+}
+
 async function saveClienteSheets(cliente) {
   try {
     showSync('syncing');
-    const row = {
-      id: cliente.id,
-      nombre: cliente.nombre,
-      tel: cliente.tel || '',
-      seg: cliente.seg || 'domicilio',
-      ruta: cliente.ruta || 'lunes',
-      zona: cliente.zona || '',
-      notas: cliente.notas || '',
-      fmt: cliente.fmt,
-      estado: cliente.estado || 'activo',
-      freq: cliente.freq || 'semanal',
-      lat: cliente.lat || null,
-      lng: cliente.lng || null
-    };
+    const row = clienteRowForSupabase(cliente);
     await sbUpsert('clientes', row);
     showSync('ok');
   } catch(e) {
@@ -1422,13 +1435,38 @@ async function syncPedidosFromSheets(weekKey) {
         mapped.forEach(remote => {
           const local = PEDIDOS.find(p => p.id === remote.id && p.weekKey === weekKey);
           if (local) {
-            local.pago = remote.pago;
-            local.entregado = remote.entregado;
-            local.notaCobro = remote.notaCobro;
+            // [MR] FIX 24-nov — bug de "cobros fantasma": si localmente ya está
+            // marcado pagado/entregado pero Supabase todavía dice que no, NO hay
+            // que creerle a Supabase a ciegas — lo más probable es que el push de
+            // ese cobro falló en silencio y Supabase quedó con el dato viejo. Si
+            // se pisa local con ese dato viejo, el cobro "reaparece" como
+            // pendiente días después aunque sí se había cobrado. Local manda en
+            // ese caso, y se re-sube para corregir Supabase en vez de revertir.
+            const localMasAvanzado = (local.pago === 'pagado' && remote.pago !== 'pagado')
+                                   || (local.entregado === true && remote.entregado !== true);
+            if (localMasAvanzado) {
+              console.warn('[MR] syncPedidosFromSheets: pedido id=' + local.id + ' (' + (local.nombre||'') + ') está más avanzado en local que en Supabase — re-subiendo en vez de revertir.');
+              pushPedidoSheets(local).catch(()=>{});
+            } else {
+              local.pago = remote.pago;
+              local.entregado = remote.entregado;
+              local.notaCobro = remote.notaCobro;
+            }
           } else {
             PEDIDOS.push(remote);
           }
         });
+        // [MR] FIX 23-nov — red de seguridad: si este dispositivo tiene pedidos LOCALES
+        // de esta semana que Supabase NO devolvió (quedaron huérfanos por algún gap en el
+        // push, ej. el de renderRuta ya corregido, o alguno futuro), volver a subirlos ahora
+        // mismo. Así, aunque aparezca otro gap que no hayamos visto, se autocorrige solo en
+        // la próxima sincronización en vez de necesitar el comando manual de consola.
+        const remoteIds = new Set(mapped.map(r => r.id));
+        const huerfanos = PEDIDOS.filter(p => p.weekKey === weekKey && !remoteIds.has(p.id));
+        if (huerfanos.length > 0) {
+          console.warn('[MR] syncPedidosFromSheets: ' + huerfanos.length + ' pedido(s) locales de ' + weekKey + ' no estaban en Supabase — re-subiendo automáticamente.');
+          pushPedidosBulk(huerfanos).catch(e => console.warn('[MR] re-push de huérfanos falló:', e && e.message));
+        }
       }
       lsSet('mr_pedidos', JSON.stringify(PEDIDOS));
       console.log('[MR] PEDIDOS total tras merge de', weekKey, ':', PEDIDOS.filter(p=>p.weekKey===weekKey).length, '(array completo:', PEDIDOS.length, ')');
@@ -1445,10 +1483,20 @@ async function syncAllPendingPedidos() {
     data.forEach(remote => {
       const local = PEDIDOS.find(p => p.id === Number(remote.id) && p.weekKey === remote.week_key);
       if (local) {
-        // Actualizar estado
-        local.pago = remote.pago || 'pendiente';
-        local.entregado = remote.entregado || false;
-        local.notaCobro = remote.nota_cobro || '';
+        // [MR] FIX 24-nov — esta consulta trae de Supabase SOLO lo que Supabase
+        // cree que sigue pendiente de cobro. Si local ya lo tiene marcado pagado
+        // (el push de ese cobro falló en silencio en su momento), no hay que
+        // pisarlo con el dato viejo de Supabase — eso es justo lo que causaba
+        // que un cobro ya hecho "reapareciera" como pendiente días después.
+        // Re-subimos el estado local para corregir Supabase en vez de revertir.
+        if (local.pago === 'pagado') {
+          console.warn('[MR] syncAllPendingPedidos: pedido id=' + local.id + ' (' + (local.nombre||'') + ') ya está pagado en local pero Supabase lo tenía pendiente — re-subiendo.');
+          pushPedidoSheets(local).catch(()=>{});
+        } else {
+          local.pago = remote.pago || 'pendiente';
+          local.entregado = remote.entregado || false;
+          local.notaCobro = remote.nota_cobro || '';
+        }
       } else {
         // No está en memoria — agregarlo para que aparezca en Cobros
         PEDIDOS.push({
@@ -1506,8 +1554,26 @@ function pedidoToRow(pedido) {
 }
 
 async function pushPedidoSheets(pedido) {
-  try { await sbUpsert('pedidos', pedidoToRow(pedido)); } 
-  catch(e) { console.warn('pushPedido error', e); }
+  // [MR] 24-nov: este push es el que corre cada vez que se marca un cobro o una
+  // entrega (togglePago, toggleEntregado, Entrega/Venta Rápida, etc.). Antes era
+  // un solo intento silencioso — si fallaba (red, pestaña cerrada justo después
+  // de marcar "Cobrado"), Supabase se quedaba con el dato viejo para siempre, y
+  // el merge de sincronización después terminaba "revirtiendo" el cobro de vuelta
+  // a pendiente en el celular/compu días después. Ahora reintenta una vez más, y
+  // si aun así falla, avisa visiblemente en vez de quedar en silencio.
+  try {
+    await sbUpsert('pedidos', pedidoToRow(pedido));
+    return;
+  } catch(e) {
+    console.warn('[MR] pushPedidoSheets: primer intento falló para id=' + pedido.id + ', reintentando:', e && e.message);
+  }
+  try {
+    await sbUpsert('pedidos', pedidoToRow(pedido));
+    console.log('[MR] pushPedidoSheets: reintento OK para id=' + pedido.id);
+  } catch(e2) {
+    console.error('[MR] pushPedidoSheets: no se pudo subir el pedido id=' + pedido.id + ' tras 2 intentos:', e2 && e2.message);
+    alert('⚠️ No se pudo guardar este cambio de cobro/entrega en Supabase (sin conexión o se cortó la subida).\n\nCliente: ' + (pedido.nombre || '') + '\n\nVolvé a intentarlo en unos segundos — si no, el celular no va a ver este cambio y puede "revertirse" solo.');
+  }
 }
 
 async function pushPedidosBulk(pedidos) {
@@ -4530,46 +4596,45 @@ function filterRuta(query) {
 // ═══════════════════════════════════════════════
 // RUTA CUSTOM ORDER (drag & drop)
 // ═══════════════════════════════════════════════
-// Cache en memoria para órdenes de ruta — se sincroniza con Supabase
-let RUTA_ORDERS = {};
+// [MR] 24-nov: el orden de ruta YA NO vive en kv_store por semana (se perdía
+// cada semana y había que reordenar siempre). Ahora es persistente por cliente,
+// en 4 columnas nuevas de la tabla `clientes` en Supabase: orden_lunes,
+// orden_martes, orden_miercoles, orden_pickup — una por día de ruta. Un cliente
+// solo tiene valor en la columna de SU día (orden_<c.ruta>); las otras quedan
+// null. El orden se mantiene de una semana a otra hasta que alguien lo mueva
+// de nuevo a mano. El viejo mecanismo RUTA_ORDERS/ruta_orders se retiró.
 
-function getRutaOrderKey(dia, weekKey) { return 'ruta_order_' + weekKey + '_' + dia; }
-function getRutaOrder(dia, weekKey) {
-  const key = getRutaOrderKey(dia, weekKey);
-  if (RUTA_ORDERS[key]) return RUTA_ORDERS[key];
-  try { const s = lsGet(key); return s ? JSON.parse(s) : null; } catch(e) { return null; }
+function applyRutaOrder(stops, dia /*, weekKey — ya no se usa, el orden no es por semana */) {
+  const ordenKey = 'orden_' + dia;
+  const conOrden = [];
+  const sinOrden = [];
+  stops.forEach(s => {
+    const v = s[ordenKey];
+    if (v === null || v === undefined || v === '') sinOrden.push(s);
+    else conOrden.push(s);
+  });
+  conOrden.sort((a, b) => (a[ordenKey] - b[ordenKey]));
+  // Sin orden asignado todavía (clientes nuevos, o que nunca se movieron a mano)
+  // van primero, arriba de todo, para que se vean fácil y se puedan arrastrar.
+  return [...sinOrden, ...conOrden];
 }
-function saveRutaOrder(dia, weekKey, order) {
-  const key = getRutaOrderKey(dia, weekKey);
-  // Guardar local e in-memory inmediatamente
-  RUTA_ORDERS[key] = order;
-  try { lsSet(key, JSON.stringify(order)); } catch(e) {}
-  // Push a Supabase para que Ronald lo vea en el celular
-  sbUpsert('kv_store', { key: 'ruta_orders', value: JSON.stringify(RUTA_ORDERS) })
-    .catch(e => console.warn('saveRutaOrder Supabase error:', e));
-}
-async function loadRutaOrdersFromSupabase() {
-  try {
-    const res = await fetch(`${SUPA_URL}/rest/v1/kv_store?key=eq.ruta_orders&select=value`, {
-      headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY }
-    });
-    const data = await res.json();
-    if (data && data[0] && data[0].value) {
-      const remote = JSON.parse(data[0].value);
-      // Remote gana — es la fuente de verdad cross-device
-      RUTA_ORDERS = { ...RUTA_ORDERS, ...remote };
-      Object.entries(RUTA_ORDERS).forEach(([k, v]) => { try { lsSet(k, JSON.stringify(v)); } catch(e){} });
-    }
-  } catch(e) { /* falla silencioso, localStorage sigue funcionando */ }
-}
-function applyRutaOrder(stops, dia, weekKey) {
-  const order = getRutaOrder(dia, weekKey);
-  if (!order || !order.length) return stops;
-  const sorted = [];
-  order.forEach(id => { const s = stops.find(x => (x.id||x._id) === id); if (s) sorted.push(s); });
-  // append any new stops not in saved order
-  stops.forEach(s => { if (!order.includes(s.id||s._id)) sorted.push(s); });
-  return sorted;
+
+// Renumera TODA la lista del día (1,2,3...) según el nuevo orden visual después
+// de un drag&drop, y sube cada cliente completo a Supabase (ver nota de
+// clienteRowForSupabase: un upsert parcial {id, orden_<dia>} puede fallar).
+function saveRutaOrderPersistente(dia, orderedClientIds) {
+  const ordenKey = 'orden_' + dia;
+  const rows = [];
+  orderedClientIds.forEach((id, idx) => {
+    const c = CLIENTES.find(x => x.id === id);
+    if (!c) return;
+    c[ordenKey] = idx + 1;
+    rows.push(clienteRowForSupabase(c));
+  });
+  saveState(); // refresca localStorage con los nuevos orden_<dia> en CLIENTES
+  if (!rows.length) return;
+  console.log('[MR] saveRutaOrderPersistente: subiendo nuevo orden de ' + rows.length + ' cliente(s) para ' + dia);
+  sbUpsert('clientes', rows).catch(e => console.warn('[MR] saveRutaOrderPersistente error:', e && e.message));
 }
 
 function initDragDrop(dia, weekKey) {
@@ -4585,9 +4650,9 @@ function initDragDrop(dia, weekKey) {
     row.addEventListener('dragend', () => {
       row.classList.remove('parada-dragging');
       container.querySelectorAll('.parada-row').forEach(r => r.classList.remove('parada-drag-over'));
-      // Save new order
-      const newOrder = [...container.querySelectorAll('.parada-row[draggable]')].map(r => parseInt(r.dataset.clientId));
-      saveRutaOrder(dia, weekKey, newOrder);
+      // Save new order — persistente por cliente (ver saveRutaOrderPersistente)
+      const newOrderIds = [...container.querySelectorAll('.parada-row[draggable]')].map(r => parseInt(r.dataset.clientId));
+      saveRutaOrderPersistente(dia, newOrderIds);
       renderRuta();
     });
     row.addEventListener('dragover', e => {
@@ -4610,8 +4675,7 @@ function initDragDrop(dia, weekKey) {
 }
 
 function openWazeNext(dia, weekKey) {
-  // Find next undelivered stop in saved order
-  const order = getRutaOrder(dia, weekKey);
+  // Find next undelivered stop in saved order (orden_<dia> persistente, ver applyRutaOrder)
   const confs = CLIENTES.filter(c => {
     if (c.estado !== 'activo' || c.ruta !== dia) return false;
     const conf = getConf(weekKey, c.id);
@@ -4665,12 +4729,24 @@ function renderRuta() {
       const act = CLIENTES.filter(c => c.estado === 'activo');
       if (act.length > 0 && !PEDIDOS.some(p => p.weekKey === wk.key)) {
         const seen = new Set();
+        const nuevosAuto = [];
         act.forEach(c => {
           if (seen.has(c.id)) return;
           seen.add(c.id);
-          PEDIDOS.push(Object.assign({}, c, {pago:'pendiente', weekKey:wk.key, weekLabel:wk.label, entregado:false}));
+          const np = Object.assign({}, c, {pago:'pendiente', weekKey:wk.key, weekLabel:wk.label, entregado:false});
+          PEDIDOS.push(np);
+          nuevosAuto.push(np);
         });
         savePedidos();
+        // [MR] FIX 23-nov: esta rama creaba pedidos SOLO en localStorage y nunca los
+        // subía a Supabase. Si esto corría antes de "Generar semana" (ej. alguien abre
+        // Hoja de Ruta primero), la semana quedaba completa en lo local pero vacía en
+        // Supabase — y el top-up de genWeek() nunca lo detectaba porque solo compara
+        // contra PEDIDOS local, no contra lo que hay realmente en Supabase. Esto es la
+        // causa raíz más probable de que "Semana" aparezca vacío en el celular aunque
+        // las confirmaciones en la compu estén bien. Ahora se sube de inmediato.
+        console.log('[MR] renderRuta auto-ensure: creó ' + nuevosAuto.length + ' pedidos, subiendo a Supabase...');
+        pushPedidosBulk(nuevosAuto).catch(e => console.warn('[MR] renderRuta auto-ensure push falló:', e && e.message));
       }
     }
     el.innerHTML = '<div class="empty-state"><p style="font-size:16px">Sin confirmados aún</p><small>Andá a Confirmaciones, marcá los clientes y regresá acá.</small></div>';
@@ -5106,12 +5182,15 @@ function printRuta(dia, weekKey) {
   const wk = getWeekDates(currentWeekOffset);
   const wkKey = weekKey || wk.key;
   
-  const confirmedClients = CLIENTES.filter(c => {
+  const confirmedClientsZone = CLIENTES.filter(c => {
     if (c.estado !== 'activo' || c.ruta !== dia) return false;
     const conf = getConf(wkKey, c.id);
     return conf && (conf.estado === 'confirmado' || conf.estado === 'cambio');
   }).sort((a,b) => getZoneScore(a.zona, dia) - getZoneScore(b.zona, dia));
-  
+  // Mismo orden persistente (orden_<dia>) que se ve en Hoja de Ruta, para que lo
+  // impreso coincida con lo que Ronald ve en pantalla.
+  const confirmedClients = applyRutaOrder(confirmedClientsZone, dia);
+
   const quickDeliveries = PEDIDOS.filter(p => p.weekKey === wkKey && p.ruta === dia && p.esEntregaRapida && !p.esVentaRapida);
   const allStops = [...confirmedClients, ...quickDeliveries];
   
@@ -5414,10 +5493,9 @@ async function syncAll() {
     await syncAllPendingPedidos();
     // Push confirmaciones
     await pushConfirmacionesSheets();
-    // Sync inventario, movimientos y orden de ruta
+    // Sync inventario y movimientos (el orden de ruta ahora viaja con CLIENTES, orden_<dia>)
     await syncInventarioFromSupabase();
     await syncMovimientosFromSupabase();
-    await loadRutaOrdersFromSupabase();
     NIID = Math.max(...(INVENTARIO.length ? INVENTARIO.map(i=>i.id||0) : [0]), 0) + 1;
     NMID = Math.max(...(MOVIMIENTOS.length ? MOVIMIENTOS.map(m=>m.id||0) : [0]), 0) + 1;
     // Auto-generar semana si no hay pedidos para la semana actual — solo en carga inicial
@@ -5464,7 +5542,9 @@ setInterval(async () => {
     await syncAllPendingPedidos();
     await syncInventarioFromSupabase();
     await syncMovimientosFromSupabase();
-    await loadRutaOrdersFromSupabase();
+    // Refresca CLIENTES (incluye orden_<dia>) para que un reorden hecho en otro
+    // dispositivo (ej. Ronald en el celular) se vea acá sin recargar la página.
+    await syncClientesFromSheets();
     NIID = Math.max(...(INVENTARIO.length ? INVENTARIO.map(i=>i.id||0) : [0]), 0) + 1;
     NMID = Math.max(...(MOVIMIENTOS.length ? MOVIMIENTOS.map(m=>m.id||0) : [0]), 0) + 1;
     renderRuta();
@@ -5851,13 +5931,15 @@ function captureGPS() {
 function openMapsRuta(dia, weekKey) {
   // Get confirmed stops only
   const confs = PEDIDOS.filter(p => p.weekKey === weekKey && p.ruta === dia);
-  const stops = confs.map(p => {
+  const stopsUnordered = confs.map(p => {
     const c = CLIENTES.find(x => x.id === p.id);
     if (!c) return null;
     const conf = getConf(weekKey, p.id);
     if (!conf || (conf.estado !== 'confirmado' && conf.estado !== 'cambio')) return null;
     return c;
   }).filter(Boolean);
+  // Mismo orden persistente (orden_<dia>) que Hoja de Ruta, para que la ruta de Maps siga la misma secuencia
+  const stops = applyRutaOrder(stopsUnordered, dia);
 
   if (!stops.length) { alert('No hay paradas confirmadas para esta ruta.'); return; }
 
